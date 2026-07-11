@@ -47,8 +47,8 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Unit and integration tiers
-        run: npm test
+      - name: Unit and integration tiers (with coverage thresholds)
+        run: npm run test:coverage
 
       - name: End-to-end tier
         run: npm run test:e2e
