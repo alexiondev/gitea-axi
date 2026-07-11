@@ -13,6 +13,7 @@ const TOP_LEVEL_HELP = `usage: gitea-axi <command> [flags]
 
 commands:
   issue list    List issues in the current repository
+  issue view    Show a single issue's details
 
 global flags:
   -R, --repo <OWNER/NAME>   Override the repository detected from the git origin remote
