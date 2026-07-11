@@ -24,24 +24,49 @@ afterAll(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
+interface SandboxOptions {
+  logins?: FakeLogin[];
+  token?: string;
+  /** Set false to omit the tea binary entirely (TEA_NOT_INSTALLED path). */
+  tea?: boolean;
+  /** Raw stdout for `tea login list`, overriding the logins JSON. */
+  listOutput?: string;
+  /** Exit code for `tea login list` (default 0). */
+  listExitCode?: number;
+  /** stderr line emitted by `tea login list` when it fails. */
+  listStderr?: string;
+  /** Raw stdout for `tea login helper get`, overriding the credential block. */
+  helperOutput?: string;
+  /** Exit code for `tea login helper get` (default 0). */
+  helperExitCode?: number;
+  /** stderr line emitted by `tea login helper get` when it fails. */
+  helperStderr?: string;
+}
+
 /** A PATH dir with real git and optionally a fake tea baked to fixed replies. */
-function makeSandbox(options: { logins?: FakeLogin[]; token?: string; tea?: boolean }): string {
+function makeSandbox(options: SandboxOptions): string {
   const bin = join(root, `bin-${sandboxCounter++}`);
   mkdirSync(bin);
   symlinkSync(gitPath, join(bin, "git"));
   symlinkSync(catPath, join(bin, "cat"));
   if (options.tea !== false) {
+    const listOutput = options.listOutput ?? JSON.stringify(options.logins ?? []);
+    const helperOutput =
+      options.helperOutput ??
+      `protocol=http\nhost=fixture\nusername=u\npassword=${options.token ?? ""}`;
     const script = `#!/bin/sh
 if [ "$1" = "login" ] && [ "$2" = "list" ]; then
-  cat <<'JSON'
-${JSON.stringify(options.logins ?? [])}
-JSON
-  exit 0
+  cat <<'LISTEOF'
+${listOutput}
+LISTEOF
+${options.listStderr ? `  echo '${options.listStderr}' >&2\n` : ""}  exit ${options.listExitCode ?? 0}
 fi
 if [ "$1" = "login" ] && [ "$2" = "helper" ] && [ "$3" = "get" ]; then
   cat > /dev/null
-  printf 'protocol=http\\nhost=fixture\\nusername=u\\npassword=%s\\n' '${options.token ?? ""}'
-  exit 0
+  cat <<'HELPEREOF'
+${helperOutput}
+HELPEREOF
+${options.helperStderr ? `  echo '${options.helperStderr}' >&2\n` : ""}  exit ${options.helperExitCode ?? 0}
 fi
 echo "unexpected tea invocation: $*" >&2
 exit 1
@@ -253,5 +278,100 @@ describe("repository context detection", () => {
     expect(exitCode).toBe(0);
     expect(server!.requests[0]!.headers.authorization).toBe("Bearer named-token");
     expect(stdout).toContain("--login fixture");
+  });
+
+  it("maps a failing `tea login list` to UNKNOWN, surfacing the stderr detail", async () => {
+    const cwd = makeRepo("https://gitea.example.com/testowner/testrepo.git");
+    const bin = makeSandbox({ listExitCode: 1, listStderr: "config file is corrupt" });
+
+    const { stdout, exitCode } = await runCliTest(["issue", "list"], {
+      env: { PATH: bin },
+      cwd,
+    });
+
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("code: UNKNOWN");
+    expect(stdout).toContain("tea login list");
+    expect(stdout).toContain("config file is corrupt");
+  });
+
+  it("maps invalid JSON from `tea login list` to UNKNOWN", async () => {
+    const cwd = makeRepo("https://gitea.example.com/testowner/testrepo.git");
+    const bin = makeSandbox({ listOutput: "not json at all {" });
+
+    const { stdout, exitCode } = await runCliTest(["issue", "list"], {
+      env: { PATH: bin },
+      cwd,
+    });
+
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("code: UNKNOWN");
+    expect(stdout).toContain("invalid JSON");
+  });
+
+  it("maps non-array JSON from `tea login list` to UNKNOWN", async () => {
+    const cwd = makeRepo("https://gitea.example.com/testowner/testrepo.git");
+    const bin = makeSandbox({ listOutput: '{"not":"an array"}' });
+
+    const { stdout, exitCode } = await runCliTest(["issue", "list"], {
+      env: { PATH: bin },
+      cwd,
+    });
+
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("code: UNKNOWN");
+    expect(stdout).toContain("unexpected output");
+  });
+
+  it("tolerates login entries with missing fields", async () => {
+    // A login object with no name/url/ssh_host exercises the field fallbacks;
+    // it matches no host, so resolution ends in REPO_NOT_FOUND.
+    const cwd = makeRepo("https://gitea.example.com/testowner/testrepo.git");
+    const bin = makeSandbox({ listOutput: "[{}]" });
+
+    const { stdout, exitCode } = await runCliTest(["issue", "list"], {
+      env: { PATH: bin },
+      cwd,
+    });
+
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("code: REPO_NOT_FOUND");
+  });
+
+  it("maps a failing token helper to AUTH_REQUIRED with a repair hint", async () => {
+    const cwd = makeRepo("https://gitea.example.com/testowner/testrepo.git");
+    const bin = makeSandbox({
+      logins: [{ name: "fixture", url: "https://gitea.example.com", default: "true" }],
+      helperExitCode: 1,
+      helperStderr: "credential store is locked",
+    });
+
+    const { stdout, exitCode } = await runCliTest(["issue", "list"], {
+      env: { PATH: bin },
+      cwd,
+    });
+
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("code: AUTH_REQUIRED");
+    expect(stdout).toContain("tea login edit fixture");
+    expect(stdout).toContain("credential store is locked");
+  });
+
+  it("maps an empty token from the helper to AUTH_REQUIRED", async () => {
+    const cwd = makeRepo("https://gitea.example.com/testowner/testrepo.git");
+    const bin = makeSandbox({
+      logins: [{ name: "fixture", url: "https://gitea.example.com", default: "true" }],
+      // A credential block that carries no usable password value.
+      helperOutput: "protocol=http\nhost=gitea.example.com\nusername=u\npassword=",
+    });
+
+    const { stdout, exitCode } = await runCliTest(["issue", "list"], {
+      env: { PATH: bin },
+      cwd,
+    });
+
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("code: AUTH_REQUIRED");
+    expect(stdout).toContain("tea login edit fixture");
   });
 });

@@ -23,10 +23,10 @@ export default defineConfig({
       // coverage so a real drop fails CI while trivial churn does not. Raise
       // these as coverage climbs; never lower them to make a red build pass.
       thresholds: {
-        statements: 85,
-        branches: 78,
-        functions: 90,
-        lines: 85,
+        statements: 92,
+        branches: 87,
+        functions: 95,
+        lines: 92,
       },
     },
   },
