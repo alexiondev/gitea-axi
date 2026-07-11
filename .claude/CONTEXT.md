@@ -44,6 +44,10 @@ _Avoid_: home view, status view
 **renderDetail**: The output helper that formats a single entity's full detail as a TOON record.
 _Avoid_: detail formatter, record renderer
 
+**action-block/entity-block pattern**: The uniform convention for mutation output — an action-named block (`created:`, `edited:`, `closed:`, `reopened:`, `merged:`) when the mutation actually ran, an entity-named block (`issue:`, `pull_request:`) when it was an idempotent no-op.
+Applies across issue and PR mutations alike; a deliberate departure from gh-axi, which returns entity blocks for issue-side mutation successes.
+_Avoid_: status block, result block
+
 **count line**: The leading line in list output that states how many results were returned and their relationship to the total, e.g. `count: N of T total`.
 When a client-side filter is active, `T` is the true filtered total computed from the in-memory result set (the `X-Total-Count` header, which reflects the unfiltered total, is ignored); the bare `count: N` form does not exist.
 _Avoid_: summary line, header
@@ -93,6 +97,11 @@ Same idempotency rules as [[issue blocks]].
 No gh-axi equivalent — Gitea-specific API (`/issues/{index}/dependencies`).
 _Avoid_: depends, depends-on, dependencies
 
+**search**: The full-text query commands (`search issues <query>`, `search prs <query>`), repo-scoped via `owner` param plus [[client-side filtering]] by repository (Gitea's `/repos/issues/search` has no repo-name filter).
+Results use a locator schema (`number`, `title`, `state`, `author`, `created`) — search finds the number; `issue view` / `pr view` load the detail.
+The forbidden `--search` flag on the list commands redirects here.
+_Avoid_: query command, find
+
 ### Gitea API patterns
 
 **type guard**: The defense against Gitea's unified issue/PR model, where issue endpoints also serve PRs.
@@ -102,7 +111,8 @@ Exception: `issue comment` stays permissive — PRs genuinely share the comment 
 _Avoid_: PR filtering, issue-only mode
 
 **reviewDecision**: A computed field (not returned by Gitea) that summarizes the overall review state of a PR.
-Derived client-side from the reviews list: `APPROVED` if at least one review has `official=true`, `stale=false`, `dismissed=false`, and no non-dismissed `REQUEST_CHANGES` review exists; `CHANGES_REQUESTED` if any non-dismissed `REQUEST_CHANGES` exists; otherwise `REVIEW_REQUIRED`.
+Derived client-side from the reviews list with an official-first fallback: if any review is `official=true`, only official reviews are considered; otherwise all reviews are (unprotected repos never produce official reviews).
+Within the considered set: `CHANGES_REQUESTED` if any non-dismissed `REQUEST_CHANGES`; `APPROVED` if any non-dismissed, non-stale review with state `APPROVED`; otherwise `REVIEW_REQUIRED` (rendered `required` — covers zero-review and comment-only PRs; there is no `none` value).
 On `pr list`, this requires one extra parallel HTTP call per PR to fetch reviews.
 _Avoid_: review status, review aggregate
 
@@ -112,8 +122,9 @@ gitea-axi uses this as the equivalent of GitHub Check Runs for `pr checks` and t
 Conclusion mapping: `success`→`pass`; `failure`/`error`/`warning`→`fail` (matching Gitea's own `Combine()` logic, which treats `warning` as failure); `skipped`→`skip`; `pending`→`pending`.
 _Avoid_: check run, CI status, pipeline status
 
-**fetch-then-patch**: The pattern used for additive or subtractive mutations on list fields (assignees, reviewers) where Gitea's PATCH replaces the entire list rather than adding/removing individual entries.
+**fetch-then-patch**: The pattern used for additive or subtractive mutations on list fields where Gitea's PATCH replaces the entire list rather than adding/removing individual entries — applies to assignees only.
 gitea-axi reads the current list first, computes the desired list, then sends a single PATCH with the full resulting list.
+Reviewers do *not* use this pattern: `EditPullRequestOption` has no reviewers field; reviewer mutations go through the dedicated `POST`/`DELETE /pulls/{index}/requested_reviewers` endpoints (see ADR 0007 amendment).
 _Avoid_: read-modify-write, merge-then-patch
 
 **client-side filtering**: The policy applied when Gitea's API does not support a given filter parameter.
@@ -122,7 +133,7 @@ When any client-side filter is active, the count line emits `count: N of T total
 Client-side *sort* (`issue list --sort`) is not a filter: it reorders without changing membership, so `T` comes from the `X-Total-Count` header as usual, while still requiring full pagination before sorting.
 _Avoid_: in-memory filtering, local filtering
 
-**label name lookup**: The process of resolving a `--label <name>` string to a Gitea label ID before calling endpoints that require numeric IDs (e.g. `pr list --label`, `issue list --label`).
+**label name lookup**: The process of resolving a `--label <name>` string to a Gitea label ID before calling endpoints that require numeric IDs (e.g. `pr list --label`; note `issue list --label` does *not* need it — the issue-list endpoint accepts label names directly).
 Implemented via `GET /repos/{owner}/{repo}/labels`; matched case-insensitively.
 `--label-id <id>` is a Gitea-specific shortcut flag that bypasses the lookup and passes the ID directly.
 _Avoid_: label resolution, name-to-ID mapping

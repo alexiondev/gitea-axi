@@ -17,3 +17,14 @@ One uniform code path, no remote mutation, no fork credentials.
 - Same-repo and fork PRs check out identically.
 - Git subprocess failures (dirty worktree, network) classify as `GIT_ERROR`, carrying git's first stderr line.
 - The created local branch does not track the contributor's fork; pushing back to a fork branch is out of scope.
+
+## Amendment (2026-07-10): three-case handling for existing local branches
+
+The original two-step pipeline fails on re-checkout: git refuses to fetch into the currently checked-out branch, and a moved PR head makes the plain fetch non-fast-forward — so the second run of the same command errored, violating Principle 6.
+
+Amended behavior:
+1. Branch absent — original pipeline unchanged.
+2. Branch exists, not checked out — force-fetch (`+pull/<n>/head:<branch>`) then checkout; the local branch is defined as a mirror of the PR head.
+3. Branch currently checked out — fetch `pull/<n>/head` then `git merge --ff-only FETCH_HEAD`; divergence (local commits not on the PR head) surfaces as `GIT_ERROR` with explanatory help rather than being silently discarded.
+
+A force-reset-always variant was rejected: fully idempotent but silently destroys local commits, which is unacceptable for unattended agents.

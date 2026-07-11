@@ -57,6 +57,7 @@ The short version: tea's create commands have no `--output json` flag, its PR li
 gitea-axi reads credentials from tea's login store via `tea login list --output json`.
 It requires `tea` to be installed and at least one login configured via `tea login add`.
 At startup, it detects the current repository's Gitea hostname (see Repository Context Detection), finds the matching login entry, and extracts the token for all subsequent API calls.
+When multiple logins match the hostname: if tea's default login is among them it is used; otherwise `VALIDATION_ERROR` listing the matching profile names, with help to pass `--login <name>` — an arbitrary identity is never picked silently.
 Tea is used only for credential discovery — no commands are dispatched through the tea subprocess.
 
 ### Command Surface
@@ -93,7 +94,7 @@ This holds even when invoked by the SessionStart hook; error noise in non-Gitea 
 `--sort <created|updated|comments>` (client-side — Gitea issue list has no sort param; always descending, matching gh-axi);
 `--limit <n>` (default 30);
 `--fields <a,b,c>`.
-`--search` is explicitly forbidden (VALIDATION_ERROR).
+`--search` is explicitly forbidden (VALIDATION_ERROR; help: `` Use `gitea-axi search issues "<query>"` for full-text search ``).
 Always passes `type=issues` — Gitea's issue endpoints also serve PRs, which must never appear in issue lists (see Issue/PR Type Guard).
 Client-side `--sort` reorders without changing membership, so the standard `count: N of T total` line is kept (see ADR 0005); full pagination still precedes sorting.
 Default output fields (matching gh-axi): `number`, `title`, `state` (lowercased), `author` (plucked from `user.login`), `created` (relative time).
@@ -127,6 +128,7 @@ Extra fields available via `--fields`: `labels`, `assignees`, `milestone`, `body
 `--add-assignee <login>`;
 `--remove-assignee <login>`;
 `--milestone <name>` (resolved to milestone ID via `GET /milestones?name=<name>` — `VALIDATION_ERROR` if not found).
+Output on success: `edited: { number, status: "ok" }` — the action-block/entity-block pattern (see `pr create`) applied uniformly across issue and PR mutations; a deliberate departure from gh-axi, whose `issue edit` returns the updated `issue:` entity block.
 Label mutations use Gitea's dedicated additive/removal label endpoints (idempotent).
 `--add-label` passes the name directly via `POST /issues/{index}/labels` (Gitea accepts names here — no lookup needed).
 `--remove-label` requires an ID: resolved via case-insensitive label lookup; `VALIDATION_ERROR` if the label name does not exist in the repo; if the label exists but is not applied to this issue, Gitea's 404 on `DELETE /labels/{id}` is treated as silent success.
@@ -138,10 +140,12 @@ Closing sets `state: "closed"` via PATCH on the issue.
 `--reason` is excluded (Gitea has no `state_reason` concept).
 When `--comment` is provided, two API calls are made: PATCH to close, then POST to create the comment.
 If the PATCH succeeds but the POST fails, the error is surfaced — the issue remains closed but the failure is reported rather than silently swallowed.
+Output on success: `closed: { number, status: "ok" }` (action-block/entity-block pattern).
 Idempotent: returns early with `message: "Already closed"` if already closed.
 
 **`issue reopen <n>`**
 Sets `state: "open"` via PATCH.
+Output on success: `reopened: { number, status: "ok" }` (action-block/entity-block pattern).
 Idempotent: returns early with `message: "Already open"` if already open.
 
 **`issue comment <n> [flags]`**
@@ -203,7 +207,7 @@ No gh-axi equivalent.
 `--sort <oldest|recentupdate|leastupdate|mostcomment|leastcomment|priority>` (Gitea-specific extension — maps directly to the API `sort` param);
 `--limit <n>` (default 30);
 `--fields <a,b,c>`.
-`--search` is explicitly forbidden (VALIDATION_ERROR).
+`--search` is explicitly forbidden (VALIDATION_ERROR; help: `` Use `gitea-axi search prs "<query>"` for full-text search ``).
 Default output fields (matching gh-axi): `number`, `title`, `state` (lowercased), `author` (plucked from `user.login`), `draft` (bool→yes/no), `review` (`reviewDecision` mapped: APPROVED→approved, CHANGES_REQUESTED→changes_requested, REVIEW_REQUIRED→required).
 Extra fields via `--fields`: `body` (raw), `createdAt` (relative time, as `created`), `labels` (joined names), `milestone` (title), `mergedAt` (relative time, as `merged_at`), `url`.
 `reviewDecision` is computed client-side by fetching reviews for each PR in parallel (one extra HTTP call per PR; see ADR 0006).
@@ -250,11 +254,13 @@ Output on success: `created: { number, url }` — completing gh-axi's action-blo
 `--remove-reviewer <login>`;
 `--milestone <name>` (resolved to milestone ID via `GET /milestones?name=<name>` — `VALIDATION_ERROR` if not found);
 `--base <branch>`.
-Assignee and reviewer mutations use fetch-then-patch (see ADR 0007).
+Assignee mutations use fetch-then-patch (see ADR 0007).
+Reviewer mutations use Gitea's dedicated review-request endpoints (`POST`/`DELETE /pulls/{index}/requested_reviewers` with `{ reviewers: [login] }`) — `EditPullRequestOption` has no reviewers field, so fetch-then-patch is structurally impossible for reviewers (see ADR 0007 amendment).
 Output: `edited: { number, status: "ok" }`.
 
 **`pr close <n> [flags]`**
 `--comment <text>`.
+When `--comment` is provided, two API calls are made (PATCH to close, then POST the comment); if the PATCH succeeds but the POST fails, the error is surfaced — same partial-failure policy as `issue close`.
 Idempotent: returns `pull_request: { number, state, already: true }` if already closed or merged.
 Output on success: `closed: { number, status: "ok" }`.
 
@@ -292,9 +298,10 @@ Truncation limit: 4000 chars.
 Output: `pr_diff: { number, diff[, truncated, original_length] }`.
 
 **`pr checkout <n>`**
-Fetches the PR head branch name from `GET /pulls/{index}` (`head.ref` field), then runs in the current working directory:
-1. `git fetch origin pull/<n>/head:<branch>`
-2. `git checkout <branch>`
+Fetches the PR head branch name from `GET /pulls/{index}` (`head.ref` field), then runs in the current working directory, three-cased on the local branch state so a re-checkout is idempotent (git refuses to fetch into the checked-out branch, and a moved PR head makes the plain fetch non-fast-forward):
+1. Branch absent: `git fetch origin pull/<n>/head:<branch>`, then `git checkout <branch>`.
+2. Branch exists, not checked out: `git fetch origin +pull/<n>/head:<branch>` (force — the branch mirrors the PR head), then `git checkout <branch>`.
+3. Branch currently checked out: `git fetch origin pull/<n>/head`, then `git merge --ff-only FETCH_HEAD`; if not fast-forwardable (local commits diverge from the PR head), `GIT_ERROR` with a help line explaining the divergence — local commits are never discarded silently.
 Fetching `refs/pull/{index}/head` from the base repo works uniformly for same-repo and fork PRs — the head branch itself may live in a fork that is not a configured remote (see ADR 0011).
 Git subprocess failures (dirty worktree, network) map to `GIT_ERROR`, carrying git's first stderr line and a remediation help line.
 Output: `checkout: { number, branch, status: "ok" }`.
@@ -347,10 +354,23 @@ Output: `edit: ok`, `label: <new-name-or-original-name>`.
 Not idempotent: a nonexistent label errors with `VALIDATION_ERROR` rather than reporting success (see ADR 0010).
 Output: `delete: ok`, `label: <name>`.
 
+#### Search Commands
+
+**`search issues <query> [flags]`** / **`search prs <query> [flags]`**
+Full-text search within the current repository, added because `--search` on the list commands is forbidden and agents need a text-query escape hatch (the forbidden-flag error redirects here, mirroring gh-axi).
+The positional `<query>` is required (`VALIDATION_ERROR` if missing).
+Endpoint: `GET /repos/issues/search` with `q=<query>`, `type=issues` or `type=pulls`, and `owner=<owner>`.
+The endpoint has no repo-name filter, so results are additionally filtered client-side to the current repository via each result's `repository` field — the standard client-side filtering policy applies, including its `count: N of T total` rule with `T` from the filtered set.
+Flags: `--state <open|closed|all>` (default open); `--label <name>` (API-supported — comma-separated names); `--limit <n>` (default 30); `--fields <a,b,c>`.
+Default output fields (both commands): `number`, `title`, `state`, `author`, `created` — a locator schema; search results are Issue-shaped for both types, and `draft`/`review` parity with `pr list` would require two extra fetches per result for a command whose job is finding the number to feed into `issue view` / `pr view`.
+Output blocks: `issues:` / `pull_requests:`, matching the list commands.
+Empty state: standard `<noun>[0]: (none)`.
+
 #### Setup Command
 
 **`setup`**
 Installs the bundled Agent Skill markdown into `~/.claude/skills/` (see ADR 0009).
+The skill is a minimal pointer, not a command reference: its frontmatter description triggers on Gitea issue/PR/label work; its body says when to use gitea-axi (over tea, raw API calls, or git), lists the command groups with one-line summaries, and points at the bare `gitea-axi` dashboard and per-command `--help` for discovery — the CLI remains the single source of interface truth.
 This is gitea-axi's primary fulfillment of AXI Principle 7 (Ambient context): an explicit setup command, matching gh-axi's `setup`.
 Idempotent: re-running reports already-installed/updated rather than failing.
 Output: `setup: { skill, path, status: <installed|updated|unchanged> }`.
@@ -414,7 +434,10 @@ Exception: `issue comment` stays permissive — PRs genuinely share the comment 
 
 Gitea has no aggregated `reviewDecision` field on the PR object.
 gitea-axi computes it client-side from the reviews list (see ADR 0006).
-Logic: `APPROVED` if at least one review has `official=true`, `stale=false`, `dismissed=false` and no non-dismissed `REQUEST_CHANGES` exists; `CHANGES_REQUESTED` if any non-dismissed `REQUEST_CHANGES` exists; `REVIEW_REQUIRED` otherwise.
+Scope (official-first fallback): if any review on the PR carries `official=true`, only official reviews are considered (branch-protection semantics preserved); otherwise all reviews are considered — unprotected repos never produce official reviews, so without the fallback `APPROVED` would be unreachable there.
+Logic within the considered set: `CHANGES_REQUESTED` if any non-dismissed `REQUEST_CHANGES` exists; `APPROVED` if at least one review with state `APPROVED` has `stale=false` and `dismissed=false`; `REVIEW_REQUIRED` otherwise.
+The otherwise-bucket includes zero-review PRs and comment-only reviews: it renders as `required`, meaning "no conclusive review yet".
+There is no `none` value — a deliberate three-value departure from gh-axi's four-value mapping, since Gitea offers no non-admin way to detect whether branch protection formally requires review.
 On `pr list`, reviews for each PR are fetched in parallel (one extra HTTP call per PR in the list).
 
 ### Context Override Flags
@@ -476,12 +499,17 @@ API error responses are classified by HTTP status code and calling context:
 | 404 | called on `/repos/.../issues/{index}` | `ISSUE_NOT_FOUND` |
 | 404 | called on `/repos/.../pulls/{index}` | `PR_NOT_FOUND` |
 | 404 | other paths | `UNKNOWN` |
+| 405 | any | `VALIDATION_ERROR` (body message surfaced — e.g. PR not mergeable due to conflicts or unmet checks; help: `pr update-branch <n>` or `pr checkout <n>` to resolve) |
+| 409 | any | `VALIDATION_ERROR` (body message surfaced — e.g. head changed since merge was requested, or auto-merge already scheduled) |
 | 422 | any | `VALIDATION_ERROR` (body message surfaced) |
 | 429 | any | `RATE_LIMITED` (help: wait and retry, or reduce `--limit`) |
 | other | any | `UNKNOWN` |
 
 `TEA_NOT_INSTALLED` is emitted if the tea binary is not found during credential discovery.
-`AUTH_REQUIRED` is also emitted when tea is installed but no login matches the detected hostname (help: `` Run `tea login add --url <host>` ``, or pass `--login <name>`).
+Login matching against the detected hostname is a three-way split:
+tea installed with zero logins configured → `AUTH_REQUIRED` (the tool was never set up; help: `` Run `tea login add` ``);
+tea has logins but none match the detected hostname → `REPO_NOT_FOUND` (the repo is not recognized as belonging to a known Gitea instance — a remote URL's shape cannot reveal Gitea-ness, so an unmatched host most likely means a non-Gitea repo such as a GitHub clone; help: `` Run `tea login add --url <host>` `` if this is a Gitea instance, or pass `-R` + `--login`);
+HTTP 401 from the API → `AUTH_REQUIRED` (token invalid or revoked), per the status table.
 A `--login` value naming a nonexistent profile is `VALIDATION_ERROR`, listing the available profile names.
 `GIT_ERROR` classifies non-zero git subprocess exits (currently only `pr checkout`), carrying git's first stderr line.
 Error output is TOON-encoded to stdout (not stderr): `error: <message>`, `code: <CODE>`, and optionally `help[N]:` with suggestion lines.
@@ -554,6 +582,8 @@ This means tests exercise the full reshaping pipeline — JSON parse, field extr
 - Local / unit tier: the fixture server runs fast with no external dependencies.
   Used for all command-level assertions.
 - CI integration tier: a live disposable Gitea instance serves real API responses end-to-end, verifying that fixture recordings remain accurate and that the full HTTP pipeline works correctly.
+  CI runs on Gitea Actions on `git.alexion.dev` (where the PRs live), with the disposable Gitea as a docker service container pinned to the latest stable image tag, bumped deliberately.
+  The workflow file stays GitHub-Actions-compatible so the GitHub mirror can adopt it nearly verbatim later.
 
 **Test runner:** Vitest.
 

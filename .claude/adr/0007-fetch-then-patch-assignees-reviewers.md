@@ -27,3 +27,12 @@ Accepted cost: same policy as client-side filtering — extra HTTP calls do not 
 - The operation is not atomic: a concurrent edit between the GET and the PATCH could cause a lost update.
   Accepted as a known limitation for single-agent workflows.
 - `issue label --add` / `--remove` does NOT use fetch-then-patch — Gitea has dedicated additive label endpoints that are already idempotent.
+
+## Amendment (2026-07-10): reviewers use dedicated endpoints, not fetch-then-patch
+
+The original decision was wrong about reviewers on two counts:
+`EditPullRequestOption` has no reviewers field at all (fetch-then-patch is impossible, not merely chosen against), and Gitea does have dedicated add/remove endpoints — `POST`/`DELETE /repos/{owner}/{repo}/pulls/{index}/requested_reviewers` with `{ reviewers: string[] }`.
+
+`pr edit --add-reviewer` / `--remove-reviewer` therefore use the dedicated review-request endpoints, mirroring the label-mutation pattern.
+Fetch-then-patch remains the pattern for assignees only (issues and PRs), where the PATCH body does replace the whole list and no dedicated endpoints exist.
+`pr create --reviewer` is unaffected: `CreatePullRequestOption` accepts `reviewers` directly.
