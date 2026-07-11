@@ -1,0 +1,54 @@
+# CI for gitea-axi. Runs on Gitea Actions on the operator's instance; the syntax
+# is kept GitHub-Actions-compatible so the GitHub mirror can adopt this file
+# nearly verbatim (copy it to .github/workflows/).
+#
+# The job runs inside a node container so the disposable Gitea service is
+# reachable by its service name (`gitea:3000`) on both Gitea Actions and GitHub
+# Actions — avoiding the host-vs-service-name networking difference between the
+# two platforms.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: node:20-bookworm
+
+    services:
+      gitea:
+        # Pinned to a specific stable tag, bumped deliberately (not floating).
+        # Kept on the 1.23 line to match the gitea-js client (^1.23.0), so the
+        # e2e tier exercises response shapes the client was generated against.
+        image: gitea/gitea:1.23.5
+        env:
+          GITEA__security__INSTALL_LOCK: "true"
+          GITEA__database__DB_TYPE: sqlite3
+          GITEA__database__PATH: /data/gitea/gitea.db
+          GITEA__server__ROOT_URL: http://gitea:3000/
+          GITEA__server__HTTP_PORT: "3000"
+          GITEA__service__DISABLE_REGISTRATION: "false"
+          GITEA__service__REQUIRE_SIGNIN_VIEW: "false"
+          GITEA__log__LEVEL: warn
+
+    env:
+      # The end-to-end tier provisions and drives the CLI against this instance.
+      GITEA_AXI_E2E_URL: http://gitea:3000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit and integration tiers
+        run: npm test
+
+      - name: End-to-end tier
+        run: npm run test:e2e
