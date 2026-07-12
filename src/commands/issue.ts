@@ -1,11 +1,8 @@
 import type { Comment, CreateIssueOption, Issue } from "gitea-js";
-import {
-  BODY_TRUNCATE_LIMIT,
-  COMMENT_TRUNCATE_LIMIT,
-  truncateBody,
-} from "../body.js";
+import { BODY_TRUNCATE_LIMIT, COMMENT_TRUNCATE_LIMIT, truncateBody } from "../body.js";
 import { requireBodySource, resolveBodySource } from "../body-source.js";
 import { createClient } from "../client.js";
+import { COMMENT_FLAGS, commentItem } from "../comment.js";
 import { resolveRepoContext, type RepoContext } from "../context.js";
 import type { CliDeps } from "../deps.js";
 import { axiError, classifyHttpError } from "../errors.js";
@@ -18,7 +15,7 @@ import {
   selectExtraFields,
   type FieldDef,
 } from "../fields.js";
-import { flagValue, parseFlags } from "../flags.js";
+import { flagValue, parseFlags, parsePositionalNumber } from "../flags.js";
 import { resolveLabelIds, resolveMilestoneId } from "../lookup.js";
 import { formatCountLine, renderDetail, renderList, type DetailBlock } from "../render.js";
 import { relativeTime } from "../time.js";
@@ -214,32 +211,6 @@ async function issueList(deps: CliDeps, args: string[]): Promise<string> {
   });
 }
 
-function parseIssueNumber(positionals: string[], command: string): number {
-  const helpSuggestion = [`Run \`gitea-axi ${command} --help\` to see available flags`];
-  if (positionals.length === 0) {
-    throw axiError(`${command} requires an issue number`, "VALIDATION_ERROR", [
-      `Run \`gitea-axi ${command} <number>\``,
-    ]);
-  }
-  if (positionals.length > 1) {
-    throw axiError(
-      `Unexpected argument: ${positionals[1]}`,
-      "VALIDATION_ERROR",
-      helpSuggestion,
-    );
-  }
-  const raw = positionals[0]!;
-  const number = Number(raw);
-  if (!Number.isInteger(number) || number < 1) {
-    throw axiError(
-      `Invalid issue number: ${raw} (expected a positive integer)`,
-      "VALIDATION_ERROR",
-      helpSuggestion,
-    );
-  }
-  return number;
-}
-
 // The default detail fields reuse the same declarative extraction as the list
 // path; only `body` (truncation) and `comment_count` need bespoke handling.
 const ISSUE_VIEW_FIELDS: FieldDef<Issue>[] = [
@@ -309,7 +280,7 @@ async function issueView(deps: CliDeps, args: string[]): Promise<string> {
     { "--comments": { takesValue: false }, "--full": { takesValue: false } },
     "issue view",
   );
-  const number = parseIssueNumber(positionals, "issue view");
+  const number = parsePositionalNumber(positionals, "issue view", "issue");
   const full = flags["--full"] === true;
   const withComments = flags["--comments"] === true;
 
@@ -460,16 +431,8 @@ async function issueComment(deps: CliDeps, args: string[]): Promise<string> {
   if (args.includes("--help")) {
     return ISSUE_COMMENT_HELP;
   }
-  const { flags, positionals } = parseFlags(
-    args,
-    {
-      "--body": { takesValue: true },
-      "--body-file": { takesValue: true },
-      "--full": { takesValue: false },
-    },
-    "issue comment",
-  );
-  const number = parseIssueNumber(positionals, "issue comment");
+  const { flags, positionals } = parseFlags(args, COMMENT_FLAGS, "issue comment");
+  const number = parsePositionalNumber(positionals, "issue comment", "issue");
   const body = requireBodySource(deps, flags, "issue comment");
   const full = flags["--full"] === true;
 
@@ -487,14 +450,7 @@ async function issueComment(deps: CliDeps, args: string[]): Promise<string> {
     throw classifyHttpError(error);
   }
 
-  const raw = comment.body ?? "";
-  const item = {
-    // The issue the comment was posted to — the comment's own id is not output.
-    number,
-    author: comment.user?.login ?? "",
-    created: relativeTime(comment.created_at, new Date()),
-    body: full ? raw : truncateBody(raw, COMMENT_TRUNCATE_LIMIT, context.host),
-  };
+  const item = commentItem(comment, { number, full, host: context.host, now: new Date() });
 
   // Gitea marks a comment posted on a pull request with `pull_request_url`. Only
   // an issue target gets the `issue view` suggestion: `issue view` type-guards

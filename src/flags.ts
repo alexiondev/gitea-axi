@@ -70,6 +70,44 @@ export function consumeFlagValue(
   return { value: next, lastIndex: index + 1 };
 }
 
+/** "issue" → "an issue"; "pull request" → "a pull request". */
+function withArticle(noun: string): string {
+  return /^[aeiou]/i.test(noun) ? `an ${noun}` : `a ${noun}`;
+}
+
+/**
+ * Parse the single positional number of a `<command> <number>` invocation.
+ * `noun` names what the number identifies ("issue", "pull request") and appears
+ * in the errors; the parsing itself is identical for both.
+ */
+export function parsePositionalNumber(
+  positionals: string[],
+  command: string,
+  noun: string,
+): number {
+  const helpSuggestion = [`Run \`gitea-axi ${command} --help\` to see available flags`];
+  if (positionals.length === 0) {
+    throw axiError(
+      `${command} requires ${withArticle(noun)} number`,
+      "VALIDATION_ERROR",
+      [`Run \`gitea-axi ${command} <number>\``],
+    );
+  }
+  if (positionals.length > 1) {
+    throw axiError(`Unexpected argument: ${positionals[1]}`, "VALIDATION_ERROR", helpSuggestion);
+  }
+  const raw = positionals[0]!;
+  const number = Number(raw);
+  if (!Number.isInteger(number) || number < 1) {
+    throw axiError(
+      `Invalid ${noun} number: ${raw} (expected a positive integer)`,
+      "VALIDATION_ERROR",
+      helpSuggestion,
+    );
+  }
+  return number;
+}
+
 export function parseFlags(
   args: string[],
   spec: FlagSpec,

@@ -87,6 +87,17 @@ function classify404(response: HttpResponseLike): AxiError {
   return axiError(`Not found: ${path}`, "UNKNOWN");
 }
 
+/**
+ * The HTTP status of a failed API call, or undefined if the failure was not an
+ * HTTP response at all. For the callers that give one status a meaning of their
+ * own before falling back to {@link classifyHttpError} — a 404 from Gitea's
+ * by-base-head pull lookup, for instance, means "no such pull request exists",
+ * which is an ordinary answer rather than an error.
+ */
+export function httpStatus(error: unknown): number | undefined {
+  return isHttpResponseLike(error) ? error.status : undefined;
+}
+
 export function classifyHttpError(error: unknown): AxiError {
   if (error instanceof AxiError) {
     return error;

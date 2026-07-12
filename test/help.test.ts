@@ -29,6 +29,23 @@ describe("--help", () => {
     expect(stdout).toContain("list");
   });
 
+  it("prints the pr group help and exits 0", async () => {
+    const { stdout, exitCode } = await runCliTest(["pr", "--help"]);
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("usage: gitea-axi pr");
+    expect(stdout).toContain("create");
+    expect(stdout).toContain("comment");
+  });
+
+  it("rejects an unknown pr subcommand with exit code 2", async () => {
+    const { stdout, exitCode } = await runCliTest(["pr", "frobnicate"]);
+
+    expect(exitCode).toBe(2);
+    expect(stdout).toContain("code: VALIDATION_ERROR");
+    expect(stdout).toContain("frobnicate");
+  });
+
   it("prints the version for --version", async () => {
     const { stdout, exitCode } = await runCliTest(["--version"]);
 

@@ -3,16 +3,20 @@ import { runCliTest } from "../harness.js";
 import {
   fetchComments,
   fetchIssue,
+  fetchOpenPulls,
   provisionInstance,
+  seedBranch,
   type E2EInstance,
 } from "./provision.js";
 
 /**
- * The end-to-end tier for the issue mutations. These commands lean on behavior
- * the fixture server cannot attest to — above all that Gitea's label and
- * milestone name lookups really are case-insensitive, and that `CreateIssueOption`
- * really takes label *ids* rather than names. Both are asserted here against a
- * live instance by passing names in a different case than they were seeded in.
+ * The end-to-end tier for the issue and pull request mutations. These commands
+ * lean on behavior the fixture server cannot attest to — that Gitea's label and
+ * milestone name lookups really are case-insensitive, that `CreateIssueOption`
+ * really takes label *ids* rather than names, and that the by-base-head pull
+ * lookup behind `pr create`'s idempotency check really answers a 404 when no
+ * pull request exists for the pair and the open one when it does. Each is
+ * asserted here against a live instance rather than a recorded shape.
  */
 const E2E_URL = process.env.GITEA_AXI_E2E_URL;
 
@@ -23,19 +27,34 @@ function renderedNumber(stdout: string): number {
   return Number(match![1]);
 }
 
+/**
+ * One provisioned instance for every suite in this file: the suites run
+ * sequentially within the file, and sharing the instance keeps the bootstrap
+ * (which registers the site administrator) to a single run.
+ */
+let provisioned: Promise<E2EInstance> | undefined;
+function instanceOnce(): Promise<E2EInstance> {
+  provisioned ??= provisionInstance(E2E_URL!);
+  return provisioned;
+}
+
+function envFor(instance: E2EInstance): Record<string, string> {
+  return {
+    GITEA_AXI_API_URL: instance.baseUrl,
+    GITEA_AXI_TOKEN: instance.token,
+    GITEA_AXI_REPO: `${instance.owner}/${instance.repo}`,
+  };
+}
+
 describe.skipIf(!E2E_URL)("end-to-end: issue mutations", () => {
   let instance: E2EInstance;
 
   function env(): Record<string, string> {
-    return {
-      GITEA_AXI_API_URL: instance.baseUrl,
-      GITEA_AXI_TOKEN: instance.token,
-      GITEA_AXI_REPO: `${instance.owner}/${instance.repo}`,
-    };
+    return envFor(instance);
   }
 
   beforeAll(async () => {
-    instance = await provisionInstance(E2E_URL!);
+    instance = await instanceOnce();
   }, 150_000);
 
   it("creates an issue and reports the live number, state, and url", async () => {
@@ -117,5 +136,83 @@ describe.skipIf(!E2E_URL)("end-to-end: issue mutations", () => {
     const comments = await fetchComments(instance, number);
     expect(comments).toHaveLength(1);
     expect(comments[0]!.body).toBe("A comment from the e2e tier.");
+  });
+});
+
+describe.skipIf(!E2E_URL)("end-to-end: pull request mutations", () => {
+  let instance: E2EInstance;
+  const branch = "e2e-pr-branch";
+
+  function env(): Record<string, string> {
+    return envFor(instance);
+  }
+
+  beforeAll(async () => {
+    instance = await instanceOnce();
+    // The head branch has to exist, with a diff to propose, before a pull
+    // request can be opened from it.
+    await seedBranch(instance, branch);
+  }, 150_000);
+
+  it("creates a pull request, defaulting the base to the live repo's default branch", async () => {
+    const { stdout, exitCode } = await runCliTest(
+      ["pr", "create", "--title", "E2E created PR", "--head", branch, "--body", "From the e2e tier."],
+      { env: env() },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("created:");
+    expect(stdout).toContain(`${instance.owner}/${instance.repo}/pulls/`);
+
+    const pulls = await fetchOpenPulls(instance);
+    expect(pulls).toHaveLength(1);
+    const created = pulls[0]!;
+    expect(created.number).toBe(renderedNumber(stdout));
+    expect(created.title).toBe("E2E created PR");
+    // The base was never passed: it came from the repository's own default branch.
+    expect((created.base as { ref?: string }).ref).toBe("main");
+    expect((created.head as { ref?: string }).ref).toBe(branch);
+  });
+
+  it("short-circuits a second create for the same branch pair, creating no duplicate", async () => {
+    // Whether Gitea's by-base-head lookup really finds the pull request opened
+    // above is the assumption the whole idempotency check rests on; fixtures can
+    // only assert the shape of an answer they were told to give.
+    const { stdout, exitCode } = await runCliTest(
+      ["pr", "create", "--title", "E2E duplicate PR", "--head", branch],
+      { env: env() },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("pull_request:");
+    expect(stdout).toContain("already: true");
+    expect(stdout).not.toContain("created:");
+
+    const pulls = await fetchOpenPulls(instance);
+    expect(pulls).toHaveLength(1);
+    // The existing pull request is reported untouched — not retitled, not replaced.
+    expect(pulls[0]!.title).toBe("E2E created PR");
+  });
+
+  it("posts a comment on a live pull request and echoes it back", async () => {
+    const pulls = await fetchOpenPulls(instance);
+    const number = pulls[0]!.number as number;
+
+    const { stdout, exitCode } = await runCliTest(
+      ["pr", "comment", String(number), "--body", "A PR comment from the e2e tier."],
+      { env: env() },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("comment:");
+    expect(stdout).toContain(`number: ${number}`);
+    expect(stdout).toContain(`author: ${instance.owner}`);
+    expect(stdout).toContain("body: A PR comment from the e2e tier.");
+
+    // Pull requests really do share the issue comment endpoint, so the comment
+    // is readable back through it.
+    const comments = await fetchComments(instance, number);
+    expect(comments).toHaveLength(1);
+    expect(comments[0]!.body).toBe("A PR comment from the e2e tier.");
   });
 });

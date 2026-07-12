@@ -219,6 +219,37 @@ export async function provisionInstance(baseUrl: string): Promise<E2EInstance> {
   };
 }
 
+/**
+ * Create `branch` off the default branch, carrying one new file, so that a pull
+ * request opened from it has a real diff to propose.
+ */
+export async function seedBranch(instance: E2EInstance, branch: string): Promise<void> {
+  await apiRequest(
+    instance.baseUrl,
+    "POST",
+    `/repos/${instance.owner}/${instance.repo}/contents/${branch}.txt`,
+    instance.token,
+    {
+      content: Buffer.from(`Seeded on ${branch}.\n`).toString("base64"),
+      message: `Seed ${branch}`,
+      new_branch: branch,
+    },
+  );
+}
+
+/** Fetch the repository's open pull requests as Gitea returns them. */
+export async function fetchOpenPulls(
+  instance: E2EInstance,
+): Promise<Record<string, unknown>[]> {
+  const res = await apiRequest(
+    instance.baseUrl,
+    "GET",
+    `/repos/${instance.owner}/${instance.repo}/pulls?state=open`,
+    instance.token,
+  );
+  return (await res.json()) as Record<string, unknown>[];
+}
+
 /** Fetch a single issue as Gitea returns it, for verifying what a mutation wrote. */
 export async function fetchIssue(
   instance: E2EInstance,
