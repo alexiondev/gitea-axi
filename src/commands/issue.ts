@@ -20,6 +20,7 @@ import {
   parseEnumFlag,
   parseFlags,
   parsePositionalNumber,
+  parsePositiveInt,
   splitFlag,
 } from "../flags.js";
 import { resolveLabelIds, resolveMilestoneId } from "../lookup.js";
@@ -304,15 +305,7 @@ function parseLimit(value: string | true | undefined): number {
   if (value === undefined) {
     return DEFAULT_LIMIT;
   }
-  const limit = Number(value);
-  if (value === true || !Number.isInteger(limit) || limit < 1) {
-    throw axiError(
-      `Invalid --limit value: ${String(value)} (expected a positive integer)`,
-      "VALIDATION_ERROR",
-      ISSUE_LIST_HELP_SUGGESTION,
-    );
-  }
-  return limit;
+  return parsePositiveInt(value, "--limit", ISSUE_LIST_HELP_SUGGESTION);
 }
 
 function issueListSuggestions(

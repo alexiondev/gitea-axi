@@ -14,12 +14,20 @@ reviewDecision uses the official-first fallback: only official reviews count whe
 
 ## Acceptance criteria
 
-- [ ] `pr list` renders the default fields with `review` computed from one parallel review fetch per PR
-- [ ] reviewDecision honors the official-first fallback and maps to the three lowercase values, with zero-review and comment-only PRs rendering `required`
-- [ ] `--label` resolves the name case-insensitively to an ID (`VALIDATION_ERROR` if unknown); `--label-id` bypasses the lookup
-- [ ] `--author` and `--sort` map to their API params; `--sort` accepts the six Gitea values
-- [ ] `--assignee`, `--base`, `--head`, and `--draft` filter client-side after full pagination, and the count line reports `count: N of T total` with `T` from the in-memory filtered set
-- [ ] `--fields` exposes `body`, `createdAt`, `labels`, `milestone`, `mergedAt`, `url`
-- [ ] `--search` fails with `VALIDATION_ERROR` (exit 2) pointing at `gitea-axi search prs "<query>"`
-- [ ] Empty result emits `pull_requests[0]: (none)` plus a suggestion
-- [ ] Fixture-server tests cover the review computation variants (official/unofficial, stale, dismissed), each client-side filter with its count line, the label lookup, and the forbidden flag
+- [x] `pr list` renders the default fields with `review` computed from one parallel review fetch per PR
+- [x] reviewDecision honors the official-first fallback and maps to the three lowercase values, with zero-review and comment-only PRs rendering `required`
+- [x] `--label` resolves the name case-insensitively to an ID (`VALIDATION_ERROR` if unknown); `--label-id` bypasses the lookup
+- [x] `--author` and `--sort` map to their API params; `--sort` accepts the six Gitea values
+- [x] `--assignee`, `--base`, `--head`, and `--draft` filter client-side after full pagination, and the count line reports `count: N of T total` with `T` from the in-memory filtered set
+- [x] `--fields` exposes `body`, `createdAt`, `labels`, `milestone`, `mergedAt`, `url`
+- [x] `--search` fails with `VALIDATION_ERROR` (exit 2) pointing at `gitea-axi search prs "<query>"`
+- [x] Empty result emits `pull_requests[0]: (none)` plus a suggestion
+- [x] Fixture-server tests cover the review computation variants (official/unofficial, stale, dismissed), each client-side filter with its count line, the label lookup, and the forbidden flag
+
+## Implementation Notes
+
+- The `reviewDecision` computation lives in a new `src/review.ts` module (`reviewDecision` pure core + `fetchReviewDecision` I/O shell), so `pr view` and the dashboard can reuse the same policy in later slices (ADR 0006).
+- Added a `boolText` field extractor to `src/fields.ts` for the `draft` bool→yes/no column; it is part of the shared field vocabulary rather than inlined, since `pr view` renders `draft` too.
+- Extracted `parsePositiveInt` into `src/flags.ts` and routed `pr list`'s `--limit`/`--label-id` and `issue list`'s `--limit` through it, collapsing three copies of the same positive-integer parse into one (a review finding). Behaviour and error wording are unchanged.
+- Small unrequested robustness kept deliberately: `--label-id` accepts a comma-separated list (mirroring `--label`), and `--label` + `--label-id` may be combined — their resolved IDs concatenate. The spec describes each as a single value; this is a strict superset with no behaviour change for the single-value case.
+- The `url` extra field plucks `html_url` (the browsable URL), matching `issue list`'s precedent rather than Gitea's API `url` field.

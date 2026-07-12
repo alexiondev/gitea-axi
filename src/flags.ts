@@ -71,6 +71,27 @@ export function parseEnumFlag<T extends string>(
   return value as T;
 }
 
+/**
+ * Parse a flag's value as a positive integer, rejecting a bare switch or a
+ * non-integer with a uniform `VALIDATION_ERROR`. `label` names the flag in the
+ * message (e.g. "--limit", "--label-id"). Shared by every flag that takes one.
+ */
+export function parsePositiveInt(
+  value: string | true,
+  label: string,
+  suggestions: string[] = [],
+): number {
+  const parsed = Number(value);
+  if (value === true || !Number.isInteger(parsed) || parsed < 1) {
+    throw axiError(
+      `Invalid ${label} value: ${String(value)} (expected a positive integer)`,
+      "VALIDATION_ERROR",
+      suggestions,
+    );
+  }
+  return parsed;
+}
+
 /** Split "--flag=value" into name and inline value; "--flag" has none. */
 export function splitFlag(arg: string): SplitFlag {
   const equals = arg.indexOf("=");

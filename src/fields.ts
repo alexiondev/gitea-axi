@@ -33,6 +33,20 @@ export function lowercased<T>(name: string, path: string = name): FieldDef<T> {
 }
 
 /**
+ * Render a boolean field as one of two words (default `yes`/`no`). A missing or
+ * falsy value reads as the `no` text, so an absent `draft` flag is reported as
+ * the ordinary non-draft it represents rather than blank.
+ */
+export function boolText<T>(
+  name: string,
+  path: string = name,
+  yes = "yes",
+  no = "no",
+): FieldDef<T> {
+  return { name, extract: (raw) => (pluckPath(raw, path) ? yes : no) };
+}
+
+/**
  * Join a field holding an array of objects (labels, assignees) into a single
  * string of each element's `key` property.
  */
