@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { createServer, type Server } from "node:http";
+import { createServer, type IncomingMessage, type Server } from "node:http";
 
 export interface FixtureRoute {
   method: string;
@@ -20,6 +20,8 @@ export interface RecordedRequest {
   path: string;
   query: Record<string, string>;
   headers: Record<string, string>;
+  /** Parsed JSON request body; undefined when the request carried none. */
+  body?: unknown;
 }
 
 export interface FixtureServer {
@@ -49,6 +51,26 @@ function matches(route: FixtureRoute, request: RecordedRequest): boolean {
   return true;
 }
 
+/** Collect the request stream, parsing it as JSON when it carried a payload. */
+async function readRequestBody(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(chunk as Buffer);
+  }
+  if (chunks.length === 0) {
+    return undefined;
+  }
+  const raw = Buffer.concat(chunks).toString("utf8");
+  if (!raw) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
 export async function startFixtureServer(routes: FixtureRoute[]): Promise<FixtureServer> {
   const requests: RecordedRequest[] = [];
   const server: Server = createServer((req, res) => {
@@ -62,21 +84,24 @@ export async function startFixtureServer(routes: FixtureRoute[]): Promise<Fixtur
       ),
     };
     requests.push(recorded);
-    const route = routes.find((candidate) => matches(candidate, recorded));
-    if (!route) {
-      res.writeHead(599, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          message: `no fixture route matched ${recorded.method} ${recorded.path} ${JSON.stringify(recorded.query)}`,
-        }),
-      );
-      return;
-    }
-    res.writeHead(route.status ?? 200, {
-      "content-type": "application/json",
-      ...route.headers,
+    void readRequestBody(req).then((body) => {
+      recorded.body = body;
+      const route = routes.find((candidate) => matches(candidate, recorded));
+      if (!route) {
+        res.writeHead(599, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            message: `no fixture route matched ${recorded.method} ${recorded.path} ${JSON.stringify(recorded.query)}`,
+          }),
+        );
+        return;
+      }
+      res.writeHead(route.status ?? 200, {
+        "content-type": "application/json",
+        ...route.headers,
+      });
+      res.end(JSON.stringify(loadBody(route)));
     });
-    res.end(JSON.stringify(loadBody(route)));
   });
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);

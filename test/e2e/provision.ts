@@ -22,6 +22,14 @@ export interface E2EInstance {
   openTitles: string[];
   /** Title of the single seeded closed issue. */
   closedTitle: string;
+  /**
+   * A label seeded in mixed case. The mutation tier passes it in a *different*
+   * case, so the case-insensitive name→id lookup is exercised against live Gitea
+   * rather than only against fixtures.
+   */
+  labelName: string;
+  /** A milestone seeded in mixed case, for the same reason as {@link labelName}. */
+  milestoneTitle: string;
 }
 
 const USERNAME = "e2e-admin";
@@ -188,7 +196,55 @@ export async function provisionInstance(baseUrl: string): Promise<E2EInstance> {
     state: "closed",
   });
 
-  return { baseUrl: normalized, owner: USERNAME, repo, token, openTitles, closedTitle };
+  const labelName = "E2E-Bug";
+  await apiRequest(normalized, "POST", `/repos/${USERNAME}/${repo}/labels`, token, {
+    name: labelName,
+    color: "#ff0000",
+  });
+
+  const milestoneTitle = "E2E-Milestone";
+  await apiRequest(normalized, "POST", `/repos/${USERNAME}/${repo}/milestones`, token, {
+    title: milestoneTitle,
+  });
+
+  return {
+    baseUrl: normalized,
+    owner: USERNAME,
+    repo,
+    token,
+    openTitles,
+    closedTitle,
+    labelName,
+    milestoneTitle,
+  };
+}
+
+/** Fetch a single issue as Gitea returns it, for verifying what a mutation wrote. */
+export async function fetchIssue(
+  instance: E2EInstance,
+  number: number,
+): Promise<Record<string, unknown>> {
+  const res = await apiRequest(
+    instance.baseUrl,
+    "GET",
+    `/repos/${instance.owner}/${instance.repo}/issues/${number}`,
+    instance.token,
+  );
+  return (await res.json()) as Record<string, unknown>;
+}
+
+/** Fetch an issue's comments as Gitea returns them. */
+export async function fetchComments(
+  instance: E2EInstance,
+  number: number,
+): Promise<Record<string, unknown>[]> {
+  const res = await apiRequest(
+    instance.baseUrl,
+    "GET",
+    `/repos/${instance.owner}/${instance.repo}/issues/${number}/comments`,
+    instance.token,
+  );
+  return (await res.json()) as Record<string, unknown>[];
 }
 
 /**

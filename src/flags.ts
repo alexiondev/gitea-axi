@@ -1,18 +1,41 @@
 import { axiError } from "./errors.js";
 
 export interface FlagSpec {
-  /** Flag names (e.g. "--state") mapped to whether they take a value. */
-  [name: string]: { takesValue: boolean };
+  /** Flag names (e.g. "--state") mapped to how they are parsed. */
+  [name: string]: {
+    takesValue: boolean;
+    /** Accumulate every occurrence into `lists` instead of `flags` (e.g. `--label`). */
+    repeatable?: boolean;
+  };
 }
 
 export interface ParsedFlags {
+  /** Single-valued flags: the value, or `true` for a bare switch. */
   flags: Record<string, string | true>;
+  /**
+   * Values of each repeatable flag in argv order. Every repeatable flag in the
+   * spec is present, holding an empty array when it was not passed.
+   */
+  lists: Record<string, string[]>;
   positionals: string[];
 }
 
 export interface SplitFlag {
   name: string;
   inlineValue?: string;
+}
+
+/**
+ * Read a value-taking flag. `parseFlags` rejects such a flag without a value,
+ * so anything present here is a string; the `true` case only arises for bare
+ * switches, which callers never read through this helper.
+ */
+export function flagValue(
+  flags: Record<string, string | true>,
+  name: string,
+): string | undefined {
+  const value = flags[name];
+  return typeof value === "string" ? value : undefined;
 }
 
 /** Split "--flag=value" into name and inline value; "--flag" has none. */
@@ -53,6 +76,12 @@ export function parseFlags(
   helpCommand: string,
 ): ParsedFlags {
   const flags: Record<string, string | true> = {};
+  const lists: Record<string, string[]> = {};
+  for (const [name, entry] of Object.entries(spec)) {
+    if (entry.repeatable) {
+      lists[name] = [];
+    }
+  }
   const positionals: string[] = [];
   const helpSuggestion = [`Run \`gitea-axi ${helpCommand} --help\` to see available flags`];
   for (let i = 0; i < args.length; i++) {
@@ -74,8 +103,12 @@ export function parseFlags(
       continue;
     }
     const consumed = consumeFlagValue(args, i, flag, helpSuggestion);
-    flags[flag.name] = consumed.value;
+    if (entry.repeatable) {
+      lists[flag.name]!.push(consumed.value);
+    } else {
+      flags[flag.name] = consumed.value;
+    }
     i = consumed.lastIndex;
   }
-  return { flags, positionals };
+  return { flags, lists, positionals };
 }
