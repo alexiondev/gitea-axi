@@ -15,8 +15,15 @@ import {
   selectExtraFields,
   type FieldDef,
 } from "../fields.js";
-import { flagValue, parseFlags, parsePositionalNumber } from "../flags.js";
+import {
+  flagValue,
+  parseEnumFlag,
+  parseFlags,
+  parsePositionalNumber,
+  splitFlag,
+} from "../flags.js";
 import { resolveLabelIds, resolveMilestoneId } from "../lookup.js";
+import { fetchAllPages, readTotalCount } from "../paginate.js";
 import { formatCountLine, renderDetail, renderList, type DetailBlock } from "../render.js";
 import { relativeTime } from "../time.js";
 import { suggestCommand } from "../suggestions.js";
@@ -86,9 +93,15 @@ export const ISSUE_LIST_HELP = `usage: gitea-axi issue list [flags]
 List issues in the current repository. Pull requests are never included.
 
 flags:
-  --state <open|closed|all>   Filter by state (default: open)
-  --limit <n>                 Maximum number of issues to return (default: 30)
-  --help                      Show this help
+  --state <open|closed|all>       Filter by state (default: open)
+  --label <a,b>                   Filter by label name (comma-separated)
+  --assignee <login>              Filter by assignee
+  --author <login>                Filter by author
+  --milestone <name>              Filter by milestone name
+  --sort <created|updated|comments>  Sort descending (client-side)
+  --limit <n>                     Maximum number of issues to return (default: 30)
+  --fields <a,b,c>                Append extra fields: body, closedAt, labels, milestone, updatedAt, url
+  --help                          Show this help
 
 global flags:
   -R, --repo <OWNER/NAME>     Override the repository detected from the git origin remote
@@ -103,8 +116,28 @@ const ISSUE_LIST_FIELDS: FieldDef<Issue>[] = [
   relativeTimeField("created", "created_at"),
 ];
 
+// Appended to the defaults on request via `--fields`, never replacing them.
+const ISSUE_LIST_EXTRA_FIELDS: Record<string, FieldDef<Issue>> = {
+  body: pluck("body"),
+  closedAt: relativeTimeField("closedAt", "closed_at"),
+  labels: joined("labels", "labels", "name"),
+  milestone: pluck("milestone", "milestone.title"),
+  updatedAt: relativeTimeField("updatedAt", "updated_at"),
+  url: pluck("url", "html_url"),
+};
+
 const ISSUE_STATES = ["open", "closed", "all"] as const;
 type IssueState = (typeof ISSUE_STATES)[number];
+
+const ISSUE_SORTS = ["created", "updated", "comments"] as const;
+type IssueSort = (typeof ISSUE_SORTS)[number];
+
+/** Sort keys, read descending. A missing or unparseable value sorts last. */
+const ISSUE_SORT_KEYS: Record<IssueSort, (issue: Issue) => number> = {
+  created: (issue) => timestamp(issue.created_at),
+  updated: (issue) => timestamp(issue.updated_at),
+  comments: (issue) => issue.comments ?? 0,
+};
 
 const DEFAULT_LIMIT = 30;
 
@@ -112,18 +145,68 @@ const ISSUE_LIST_HELP_SUGGESTION = [
   "Run `gitea-axi issue list --help` to see available flags",
 ];
 
+function timestamp(iso: string | undefined): number {
+  const value = Date.parse(iso ?? "");
+  return Number.isNaN(value) ? 0 : value;
+}
+
 function parseState(value: string | true | undefined): IssueState {
-  if (value === undefined) {
-    return "open";
+  return parseEnumFlag(value, "--state", ISSUE_STATES, ISSUE_LIST_HELP_SUGGESTION) ?? "open";
+}
+
+function parseSort(value: string | true | undefined): IssueSort | undefined {
+  return parseEnumFlag(value, "--sort", ISSUE_SORTS, ISSUE_LIST_HELP_SUGGESTION);
+}
+
+/**
+ * Gitea's issue list has no sort parameter, so ordering happens here, over the
+ * fully paginated set (see ADR 0005). `sort` is stable, so equal keys keep the
+ * order the API returned them in.
+ */
+function sortIssues(issues: Issue[], sort: IssueSort): Issue[] {
+  const key = ISSUE_SORT_KEYS[sort];
+  return [...issues].sort((a, b) => key(b) - key(a));
+}
+
+/**
+ * The filters Gitea's issue list accepts as query params, under its own names.
+ * All four filter server-side; none of them needs the client-side policy.
+ */
+function issueListFilters(flags: Record<string, string | true>): Record<string, string> {
+  const filters: Record<string, string> = {};
+  const label = flagValue(flags, "--label");
+  if (label !== undefined) {
+    filters.labels = label;
   }
-  if (value === true || !ISSUE_STATES.includes(value as IssueState)) {
-    throw axiError(
-      `Invalid --state value: ${String(value)} (expected open, closed, or all)`,
-      "VALIDATION_ERROR",
-      ISSUE_LIST_HELP_SUGGESTION,
-    );
+  const assignee = flagValue(flags, "--assignee");
+  if (assignee !== undefined) {
+    filters.assigned_by = assignee;
   }
-  return value as IssueState;
+  const author = flagValue(flags, "--author");
+  if (author !== undefined) {
+    filters.created_by = author;
+  }
+  const milestone = flagValue(flags, "--milestone");
+  if (milestone !== undefined) {
+    filters.milestones = milestone;
+  }
+  return filters;
+}
+
+/**
+ * `--search` is refused rather than quietly forwarded to the API's `q` param:
+ * full-text search is `search issues`, and a flag that half-worked here would be
+ * the wrong thing to learn. Checked ahead of `parseFlags` so every form of the
+ * flag — valued, inline, bare — lands on the redirect instead of a generic
+ * unknown-flag or missing-value error.
+ */
+function refuseSearchFlag(args: string[]): void {
+  if (!args.some((arg) => splitFlag(arg).name === "--search")) {
+    return;
+  }
+  throw axiError("issue list does not support --search", "VALIDATION_ERROR", [
+    'Use `gitea-axi search issues "<query>"` for full-text search',
+  ]);
 }
 
 function parseLimit(value: string | true | undefined): number {
@@ -168,9 +251,19 @@ async function issueList(deps: CliDeps, args: string[]): Promise<string> {
   if (args.includes("--help")) {
     return ISSUE_LIST_HELP;
   }
+  refuseSearchFlag(args);
   const { flags, positionals } = parseFlags(
     args,
-    { "--state": { takesValue: true }, "--limit": { takesValue: true } },
+    {
+      "--state": { takesValue: true },
+      "--label": { takesValue: true },
+      "--assignee": { takesValue: true },
+      "--author": { takesValue: true },
+      "--milestone": { takesValue: true },
+      "--sort": { takesValue: true },
+      "--limit": { takesValue: true },
+      "--fields": { takesValue: true },
+    },
     "issue list",
   );
   if (positionals.length > 0) {
@@ -181,33 +274,58 @@ async function issueList(deps: CliDeps, args: string[]): Promise<string> {
     );
   }
   const state = parseState(flags["--state"]);
+  const sort = parseSort(flags["--sort"]);
   const limit = parseLimit(flags["--limit"]);
+  const extraFields = selectExtraFields(
+    flagValue(flags, "--fields"),
+    ISSUE_LIST_EXTRA_FIELDS,
+    "issue list",
+  );
+  const query = { state, type: "issues" as const, ...issueListFilters(flags) };
 
   const context = await resolveRepoContext(deps);
   const api = createClient(context);
-  let response;
+  let issues: Issue[];
+  let total: number | undefined;
   try {
-    response = await api.repos.issueListIssues(context.owner, context.name, {
-      state,
-      type: "issues",
-      limit,
-      page: 1,
-    });
+    if (sort === undefined) {
+      const response = await api.repos.issueListIssues(context.owner, context.name, {
+        ...query,
+        limit,
+        page: 1,
+      });
+      issues = response.data ?? [];
+      total = readTotalCount(response.headers);
+    } else {
+      // Sorting client-side means holding the whole set first: the top `limit`
+      // by the sort key is only knowable once every page is in (see ADR 0005).
+      const result = await fetchAllPages<Issue>((page, pageLimit) =>
+        api.repos.issueListIssues(context.owner, context.name, {
+          ...query,
+          page,
+          limit: pageLimit,
+        }),
+      );
+      issues = sortIssues(result.items, sort).slice(0, limit);
+      // Sorting reorders without changing membership, so the API's own total
+      // still describes this result set and the count line keeps reporting it.
+      // Having paginated everything, the set's own size is the fallback when an
+      // instance omits the header — a total is always reported (Principle 4).
+      total = result.total ?? result.items.length;
+    }
   } catch (error) {
     throw classifyHttpError(error);
   }
-  const issues = response.data ?? [];
-  const totalHeader = response.headers.get("x-total-count");
-  const total = totalHeader !== null ? Number(totalHeader) : undefined;
-  const resolvedTotal = total !== undefined && Number.isFinite(total) ? total : undefined;
 
   const now = new Date();
-  const rows = issues.map((issue) => extractRow(issue, ISSUE_LIST_FIELDS, { now }));
+  const rows = issues.map((issue) =>
+    extractRow(issue, [...ISSUE_LIST_FIELDS, ...extraFields], { now }),
+  );
   return renderList({
     noun: "issues",
     rows,
-    countLine: formatCountLine(rows.length, resolvedTotal, rows.length >= limit),
-    help: issueListSuggestions(context, state, rows.length, resolvedTotal),
+    countLine: formatCountLine(rows.length, total, rows.length >= limit),
+    help: issueListSuggestions(context, state, rows.length, total),
   });
 }
 

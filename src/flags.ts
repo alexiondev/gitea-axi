@@ -38,6 +38,39 @@ export function flagValue(
   return typeof value === "string" ? value : undefined;
 }
 
+/** ["open", "closed", "all"] → "open, closed, or all". */
+function orList(values: readonly string[]): string {
+  if (values.length < 2) {
+    return values[0] ?? "";
+  }
+  return `${values.slice(0, -1).join(", ")}, or ${values[values.length - 1]}`;
+}
+
+/**
+ * Read a flag whose value must be one of a fixed set. Returns undefined when the
+ * flag was absent, leaving the default to the caller — a flag with no default
+ * (`--sort`) and one with a default (`--state`) then differ only in what they do
+ * with that undefined.
+ */
+export function parseEnumFlag<T extends string>(
+  value: string | true | undefined,
+  name: string,
+  allowed: readonly T[],
+  suggestions: string[],
+): T | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === true || !allowed.includes(value as T)) {
+    throw axiError(
+      `Invalid ${name} value: ${String(value)} (expected ${orList(allowed)})`,
+      "VALIDATION_ERROR",
+      suggestions,
+    );
+  }
+  return value as T;
+}
+
 /** Split "--flag=value" into name and inline value; "--flag" has none. */
 export function splitFlag(arg: string): SplitFlag {
   const equals = arg.indexOf("=");

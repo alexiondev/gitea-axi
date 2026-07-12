@@ -2,36 +2,23 @@ import type { Label } from "gitea-js";
 import type { GiteaClient } from "./client.js";
 import type { RepoContext } from "./context.js";
 import { axiError, classifyHttpError } from "./errors.js";
+import { fetchAllPages } from "./paginate.js";
 
 /**
  * Name→ID resolution for the Gitea endpoints that only accept numeric ids.
  * Shared by every command that takes a `--label` or `--milestone` name.
  */
 
-const LABEL_PAGE_SIZE = 50;
-/** Guard against an unbounded loop if a server ignores paging and always returns a full page. */
-const LABEL_PAGE_LIMIT = 20;
-
 /** Fetch every label in the repository, paging until the API runs out. */
 async function listAllLabels(api: GiteaClient, context: RepoContext): Promise<Label[]> {
-  const labels: Label[] = [];
-  for (let page = 1; page <= LABEL_PAGE_LIMIT; page++) {
-    let batch: Label[];
-    try {
-      const response = await api.repos.issueListLabels(context.owner, context.name, {
-        page,
-        limit: LABEL_PAGE_SIZE,
-      });
-      batch = response.data ?? [];
-    } catch (error) {
-      throw classifyHttpError(error);
-    }
-    labels.push(...batch);
-    if (batch.length < LABEL_PAGE_SIZE) {
-      break;
-    }
+  try {
+    const { items } = await fetchAllPages<Label>((page, limit) =>
+      api.repos.issueListLabels(context.owner, context.name, { page, limit }),
+    );
+    return items;
+  } catch (error) {
+    throw classifyHttpError(error);
   }
-  return labels;
 }
 
 /**

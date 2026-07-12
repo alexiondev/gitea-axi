@@ -1,0 +1,34 @@
+[
+  {
+    "id": 310,
+    "number": 50,
+    "title": "Ship the field extractors",
+    "body": "Raw body text, kept whole by the body field.",
+    "state": "closed",
+    "is_locked": false,
+    "comments": 1,
+    "created_at": "2026-06-01T10:00:00Z",
+    "updated_at": "2026-07-05T10:00:00Z",
+    "closed_at": "2026-07-06T10:00:00Z",
+    "html_url": "http://gitea.example/testowner/testrepo/issues/50",
+    "url": "http://gitea.example/api/v1/repos/testowner/testrepo/issues/50",
+    "user": {
+      "id": 9,
+      "login": "contributor",
+      "full_name": "A Contributor",
+      "email": "contributor@example.com"
+    },
+    "labels": [
+      { "id": 1, "name": "bug", "color": "ee0701" },
+      { "id": 3, "name": "priority: high", "color": "b60205" }
+    ],
+    "milestone": {
+      "id": 4,
+      "title": "v1.0",
+      "state": "open"
+    },
+    "assignee": null,
+    "assignees": null,
+    "pull_request": null
+  }
+]
