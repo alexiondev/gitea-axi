@@ -37,6 +37,9 @@ commands:
   edit       Edit an issue's title, body, labels, assignees, or milestone
   close      Close an issue
   reopen     Reopen a closed issue
+  delete     Permanently delete an issue
+  pin        Pin an issue to the repository
+  unpin      Unpin an issue
   comment    Post a comment on an issue or pull request
 
 Run \`gitea-axi issue <command> --help\` for the flags of a command.
@@ -78,6 +81,46 @@ global flags:
 export const ISSUE_REOPEN_HELP = `usage: gitea-axi issue reopen <number>
 
 Reopen a closed issue in the current repository.
+
+flags:
+  --help                Show this help
+
+global flags:
+  -R, --repo <OWNER/NAME>     Override the repository detected from the git origin remote
+  --login <name>              Select a tea login profile by name
+`;
+
+export const ISSUE_DELETE_HELP = `usage: gitea-axi issue delete <number>
+
+Permanently delete an issue in the current repository. This is a hard delete and
+requires admin or owner permissions. Deleting a nonexistent issue is an error,
+not a silent success.
+
+flags:
+  --help                Show this help
+
+global flags:
+  -R, --repo <OWNER/NAME>     Override the repository detected from the git origin remote
+  --login <name>              Select a tea login profile by name
+`;
+
+export const ISSUE_PIN_HELP = `usage: gitea-axi issue pin <number>
+
+Pin an issue to the top of the repository's issue list. Pinning an
+already-pinned issue is a no-op.
+
+flags:
+  --help                Show this help
+
+global flags:
+  -R, --repo <OWNER/NAME>     Override the repository detected from the git origin remote
+  --login <name>              Select a tea login profile by name
+`;
+
+export const ISSUE_UNPIN_HELP = `usage: gitea-axi issue unpin <number>
+
+Unpin an issue from the repository's issue list. Unpinning an issue that is not
+pinned is a no-op.
 
 flags:
   --help                Show this help
@@ -857,6 +900,111 @@ async function issueReopen(deps: CliDeps, args: string[]): Promise<string> {
   });
 }
 
+/**
+ * Whether an issue is pinned. Gitea records pin position in `pin_order`, a
+ * positive integer for a pinned issue and 0 (or absent) for an unpinned one, so
+ * there is no boolean flag to read — the position is the state.
+ */
+function isPinned(issue: Issue): boolean {
+  return (issue.pin_order ?? 0) > 0;
+}
+
+async function issueDelete(deps: CliDeps, args: string[]): Promise<string> {
+  if (args.includes("--help")) {
+    return ISSUE_DELETE_HELP;
+  }
+  const { positionals } = parseFlags(args, {}, "issue delete");
+  const number = parsePositionalNumber(positionals, "issue delete", "issue");
+
+  const context = await resolveRepoContext(deps);
+  const api = createClient(context);
+
+  // A hard delete, deliberately not idempotent (ADR 0010): a nonexistent issue
+  // is a 404, which classify404 maps to ISSUE_NOT_FOUND rather than reporting a
+  // deletion that never happened.
+  try {
+    await api.repos.issueDelete(context.owner, context.name, number);
+  } catch (error) {
+    throw classifyHttpError(error);
+  }
+
+  return renderDetail({
+    noun: "issue",
+    item: { number, status: "deleted" },
+    help: [suggestCommand(context, "issue list", "to see the remaining issues")],
+  });
+}
+
+async function issuePin(deps: CliDeps, args: string[]): Promise<string> {
+  if (args.includes("--help")) {
+    return ISSUE_PIN_HELP;
+  }
+  const { positionals } = parseFlags(args, {}, "issue pin");
+  const number = parsePositionalNumber(positionals, "issue pin", "issue");
+
+  const context = await resolveRepoContext(deps);
+  const api = createClient(context);
+
+  // Read the current pin state first: an already-pinned issue short-circuits to
+  // the idempotent no-op below rather than issuing a redundant POST.
+  const issue = await getIssue(api, context, number);
+  const state = issue.state ?? "open";
+  if (isPinned(issue)) {
+    return renderDetail({
+      noun: "issue",
+      item: { number, state, pinned: true, message: "Already pinned" },
+      help: [suggestCommand(context, `issue unpin ${number}`, "to unpin this issue")],
+    });
+  }
+
+  try {
+    await api.repos.pinIssue(context.owner, context.name, number);
+  } catch (error) {
+    throw classifyHttpError(error);
+  }
+
+  return renderDetail({
+    noun: "issue",
+    item: { number, state, pinned: true },
+    help: [suggestCommand(context, `issue unpin ${number}`, "to unpin this issue")],
+  });
+}
+
+async function issueUnpin(deps: CliDeps, args: string[]): Promise<string> {
+  if (args.includes("--help")) {
+    return ISSUE_UNPIN_HELP;
+  }
+  const { positionals } = parseFlags(args, {}, "issue unpin");
+  const number = parsePositionalNumber(positionals, "issue unpin", "issue");
+
+  const context = await resolveRepoContext(deps);
+  const api = createClient(context);
+
+  // Read the current pin state first: an issue that is not pinned short-circuits
+  // to the idempotent no-op below rather than issuing a redundant DELETE.
+  const issue = await getIssue(api, context, number);
+  const state = issue.state ?? "open";
+  if (!isPinned(issue)) {
+    return renderDetail({
+      noun: "issue",
+      item: { number, state, pinned: false, message: "Already unpinned" },
+      help: [suggestCommand(context, `issue pin ${number}`, "to pin this issue")],
+    });
+  }
+
+  try {
+    await api.repos.unpinIssue(context.owner, context.name, number);
+  } catch (error) {
+    throw classifyHttpError(error);
+  }
+
+  return renderDetail({
+    noun: "issue",
+    item: { number, state, pinned: false },
+    help: [suggestCommand(context, `issue pin ${number}`, "to pin this issue")],
+  });
+}
+
 export function issueCommand(deps: CliDeps) {
   return async (args: string[]): Promise<string> => {
     const [subcommand, ...rest] = args;
@@ -880,6 +1028,15 @@ export function issueCommand(deps: CliDeps) {
     }
     if (subcommand === "reopen") {
       return issueReopen(deps, rest);
+    }
+    if (subcommand === "delete") {
+      return issueDelete(deps, rest);
+    }
+    if (subcommand === "pin") {
+      return issuePin(deps, rest);
+    }
+    if (subcommand === "unpin") {
+      return issueUnpin(deps, rest);
     }
     if (subcommand === "comment") {
       return issueComment(deps, rest);
