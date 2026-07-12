@@ -1,11 +1,11 @@
-import type { Comment, CreateIssueOption, Issue } from "gitea-js";
+import type { Comment, CreateIssueOption, EditIssueOption, Issue } from "gitea-js";
 import { BODY_TRUNCATE_LIMIT, COMMENT_TRUNCATE_LIMIT, truncateBody } from "../body.js";
 import { requireBodySource, resolveBodySource } from "../body-source.js";
-import { createClient } from "../client.js";
+import { createClient, type GiteaClient } from "../client.js";
 import { COMMENT_FLAGS, commentItem } from "../comment.js";
 import { resolveRepoContext, type RepoContext } from "../context.js";
 import type { CliDeps } from "../deps.js";
-import { axiError, classifyHttpError } from "../errors.js";
+import { axiError, classifyHttpError, httpStatus } from "../errors.js";
 import {
   extractRow,
   joined,
@@ -34,9 +34,57 @@ commands:
   list       List issues in the current repository
   view       Show a single issue's details
   create     Create an issue
+  edit       Edit an issue's title, body, labels, assignees, or milestone
+  close      Close an issue
+  reopen     Reopen a closed issue
   comment    Post a comment on an issue or pull request
 
 Run \`gitea-axi issue <command> --help\` for the flags of a command.
+`;
+
+export const ISSUE_EDIT_HELP = `usage: gitea-axi issue edit <number> [flags]
+
+Edit an issue in the current repository. At least one change is required.
+
+flags:
+  --title <text>              New title
+  --body <text>               New body
+  --body-file <path>          Read the new body from a file (mutually exclusive with --body)
+  --add-label <name>          Add a label by name (repeatable)
+  --remove-label <name>       Remove a label by name (repeatable, case-insensitive)
+  --add-assignee <login>      Add an assignee (repeatable)
+  --remove-assignee <login>   Remove an assignee (repeatable)
+  --milestone <name>          Assign a milestone by name (case-insensitive)
+  --help                      Show this help
+
+global flags:
+  -R, --repo <OWNER/NAME>     Override the repository detected from the git origin remote
+  --login <name>              Select a tea login profile by name
+`;
+
+export const ISSUE_CLOSE_HELP = `usage: gitea-axi issue close <number> [flags]
+
+Close an issue in the current repository.
+
+flags:
+  --comment <text>      Post a comment when closing
+  --help                Show this help
+
+global flags:
+  -R, --repo <OWNER/NAME>     Override the repository detected from the git origin remote
+  --login <name>              Select a tea login profile by name
+`;
+
+export const ISSUE_REOPEN_HELP = `usage: gitea-axi issue reopen <number>
+
+Reopen a closed issue in the current repository.
+
+flags:
+  --help                Show this help
+
+global flags:
+  -R, --repo <OWNER/NAME>     Override the repository detected from the git origin remote
+  --login <name>              Select a tea login profile by name
 `;
 
 export const ISSUE_CREATE_HELP = `usage: gitea-axi issue create --title <text> [flags]
@@ -371,6 +419,16 @@ function buildCommentRows(
   });
 }
 
+/** Fetch a single issue, mapping any HTTP failure to an AxiError. */
+async function getIssue(api: GiteaClient, context: RepoContext, number: number): Promise<Issue> {
+  try {
+    const response = await api.repos.issueGetIssue(context.owner, context.name, number);
+    return response.data;
+  } catch (error) {
+    throw classifyHttpError(error);
+  }
+}
+
 function issueViewSuggestions(
   context: RepoContext,
   number: number,
@@ -404,13 +462,7 @@ async function issueView(deps: CliDeps, args: string[]): Promise<string> {
 
   const context = await resolveRepoContext(deps);
   const api = createClient(context);
-  let issue: Issue;
-  try {
-    const response = await api.repos.issueGetIssue(context.owner, context.name, number);
-    issue = response.data;
-  } catch (error) {
-    throw classifyHttpError(error);
-  }
+  const issue = await getIssue(api, context, number);
 
   if (issue.pull_request) {
     throw axiError(`issue #${number} is a pull request`, "VALIDATION_ERROR", [
@@ -580,6 +632,231 @@ async function issueComment(deps: CliDeps, args: string[]): Promise<string> {
   return renderDetail({ noun: "comment", item, help });
 }
 
+/**
+ * The assignee list to PATCH: the issue's current assignees with the requested
+ * additions appended and removals dropped (fetch-then-patch, ADR 0007). Matching
+ * is case-insensitive and the result is de-duplicated, order-preserving, so a
+ * login that is already assigned never lands in the list twice.
+ */
+async function resolveAssignees(
+  api: GiteaClient,
+  context: RepoContext,
+  number: number,
+  add: string[],
+  remove: string[],
+): Promise<string[]> {
+  const issue = await getIssue(api, context, number);
+  const removeSet = new Set(remove.map((login) => login.toLowerCase()));
+  const seen = new Set<string>();
+  const result: string[] = [];
+  const push = (login: string): void => {
+    const key = login.toLowerCase();
+    if (removeSet.has(key) || seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    result.push(login);
+  };
+  for (const assignee of issue.assignees ?? []) {
+    if (assignee.login) {
+      push(assignee.login);
+    }
+  }
+  for (const login of add) {
+    push(login);
+  }
+  return result;
+}
+
+async function issueEdit(deps: CliDeps, args: string[]): Promise<string> {
+  if (args.includes("--help")) {
+    return ISSUE_EDIT_HELP;
+  }
+  const { flags, lists, positionals } = parseFlags(
+    args,
+    {
+      "--title": { takesValue: true },
+      "--body": { takesValue: true },
+      "--body-file": { takesValue: true },
+      "--add-label": { takesValue: true, repeatable: true },
+      "--remove-label": { takesValue: true, repeatable: true },
+      "--add-assignee": { takesValue: true, repeatable: true },
+      "--remove-assignee": { takesValue: true, repeatable: true },
+      "--milestone": { takesValue: true },
+    },
+    "issue edit",
+  );
+  const number = parsePositionalNumber(positionals, "issue edit", "issue");
+  const title = flagValue(flags, "--title");
+  const body = resolveBodySource(deps, flags, "issue edit");
+  const milestoneName = flagValue(flags, "--milestone");
+  const addLabels = lists["--add-label"] ?? [];
+  const removeLabels = lists["--remove-label"] ?? [];
+  const addAssignees = lists["--add-assignee"] ?? [];
+  const removeAssignees = lists["--remove-assignee"] ?? [];
+
+  const changesAssignees = addAssignees.length > 0 || removeAssignees.length > 0;
+  const nothingToDo =
+    title === undefined &&
+    body === undefined &&
+    milestoneName === undefined &&
+    addLabels.length === 0 &&
+    removeLabels.length === 0 &&
+    !changesAssignees;
+  if (nothingToDo) {
+    throw axiError("issue edit requires at least one change", "VALIDATION_ERROR", [
+      "Run `gitea-axi issue edit --help` to see the fields you can change",
+    ]);
+  }
+
+  const context = await resolveRepoContext(deps);
+  const api = createClient(context);
+
+  // Name resolution runs before any mutation: whether a milestone or label name
+  // is real does not depend on the issue's state, so a typo is reported before a
+  // single change lands, never leaving the issue half-edited.
+  const milestoneId =
+    milestoneName !== undefined ? await resolveMilestoneId(api, context, milestoneName) : undefined;
+  const removeLabelIds = await resolveLabelIds(api, context, removeLabels);
+
+  // Title, body, milestone, and the recomputed assignee list travel in one PATCH.
+  const payload: EditIssueOption = {};
+  if (title !== undefined) {
+    payload.title = title;
+  }
+  if (body !== undefined) {
+    payload.body = body;
+  }
+  if (milestoneId !== undefined) {
+    payload.milestone = milestoneId;
+  }
+  if (changesAssignees) {
+    payload.assignees = await resolveAssignees(api, context, number, addAssignees, removeAssignees);
+  }
+  if (Object.keys(payload).length > 0) {
+    try {
+      await api.repos.issueEditIssue(context.owner, context.name, number, payload);
+    } catch (error) {
+      throw classifyHttpError(error);
+    }
+  }
+
+  // Label mutations use Gitea's dedicated endpoints (idempotent). `--add-label`
+  // passes names straight through — Gitea accepts them there, no lookup needed.
+  if (addLabels.length > 0) {
+    try {
+      await api.repos.issueAddLabel(context.owner, context.name, number, { labels: addLabels });
+    } catch (error) {
+      throw classifyHttpError(error);
+    }
+  }
+  for (const id of removeLabelIds) {
+    try {
+      await api.repos.issueRemoveLabel(context.owner, context.name, number, id);
+    } catch (error) {
+      // The label exists in the repo but is not applied to this issue: Gitea
+      // answers 404, and the caller's intent (label absent) already holds, so it
+      // is silent success rather than an error.
+      if (httpStatus(error) === 404) {
+        continue;
+      }
+      throw classifyHttpError(error);
+    }
+  }
+
+  // The mutation ran, so the block is named for the action, not the entity — a
+  // deliberate departure from gh-axi's `issue:` block (see ADR/spec).
+  return renderDetail({
+    noun: "edited",
+    item: { number, status: "ok" },
+    help: [suggestCommand(context, `issue view ${number}`, "to see the issue in full")],
+  });
+}
+
+async function issueClose(deps: CliDeps, args: string[]): Promise<string> {
+  if (args.includes("--help")) {
+    return ISSUE_CLOSE_HELP;
+  }
+  const { flags, positionals } = parseFlags(
+    args,
+    { "--comment": { takesValue: true } },
+    "issue close",
+  );
+  const number = parsePositionalNumber(positionals, "issue close", "issue");
+  const comment = flagValue(flags, "--comment");
+
+  const context = await resolveRepoContext(deps);
+  const api = createClient(context);
+
+  // Read the current state first: an already-closed issue short-circuits to the
+  // idempotent no-op below rather than issuing a redundant PATCH.
+  const issue = await getIssue(api, context, number);
+  if (issue.state === "closed") {
+    return renderDetail({
+      noun: "issue",
+      item: { number, state: "closed", message: "Already closed" },
+      help: [suggestCommand(context, `issue reopen ${number}`, "to reopen this issue")],
+    });
+  }
+
+  try {
+    await api.repos.issueEditIssue(context.owner, context.name, number, { state: "closed" });
+  } catch (error) {
+    throw classifyHttpError(error);
+  }
+
+  // The comment is a second call after the close lands. A failure here is
+  // surfaced, never swallowed: the issue is closed, but the caller must learn
+  // that the comment they asked for did not post.
+  if (comment !== undefined) {
+    try {
+      await api.repos.issueCreateComment(context.owner, context.name, number, { body: comment });
+    } catch (error) {
+      throw classifyHttpError(error);
+    }
+  }
+
+  return renderDetail({
+    noun: "closed",
+    item: { number, status: "ok" },
+    help: [suggestCommand(context, `issue reopen ${number}`, "to reopen this issue")],
+  });
+}
+
+async function issueReopen(deps: CliDeps, args: string[]): Promise<string> {
+  if (args.includes("--help")) {
+    return ISSUE_REOPEN_HELP;
+  }
+  const { positionals } = parseFlags(args, {}, "issue reopen");
+  const number = parsePositionalNumber(positionals, "issue reopen", "issue");
+
+  const context = await resolveRepoContext(deps);
+  const api = createClient(context);
+
+  // Read the current state first: an already-open issue short-circuits to the
+  // idempotent no-op below rather than issuing a redundant PATCH.
+  const issue = await getIssue(api, context, number);
+  if (issue.state === "open") {
+    return renderDetail({
+      noun: "issue",
+      item: { number, state: "open", message: "Already open" },
+      help: [suggestCommand(context, `issue close ${number}`, "to close this issue")],
+    });
+  }
+
+  try {
+    await api.repos.issueEditIssue(context.owner, context.name, number, { state: "open" });
+  } catch (error) {
+    throw classifyHttpError(error);
+  }
+
+  return renderDetail({
+    noun: "reopened",
+    item: { number, status: "ok" },
+    help: [suggestCommand(context, `issue view ${number}`, "to see the issue in full")],
+  });
+}
+
 export function issueCommand(deps: CliDeps) {
   return async (args: string[]): Promise<string> => {
     const [subcommand, ...rest] = args;
@@ -594,6 +871,15 @@ export function issueCommand(deps: CliDeps) {
     }
     if (subcommand === "create") {
       return issueCreate(deps, rest);
+    }
+    if (subcommand === "edit") {
+      return issueEdit(deps, rest);
+    }
+    if (subcommand === "close") {
+      return issueClose(deps, rest);
+    }
+    if (subcommand === "reopen") {
+      return issueReopen(deps, rest);
     }
     if (subcommand === "comment") {
       return issueComment(deps, rest);
