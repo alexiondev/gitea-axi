@@ -1,11 +1,14 @@
 import type {
   Comment,
   CreatePullRequestOption,
+  EditPullRequestOption,
   PullRequest,
   PullReview,
   PullReviewComment,
+  PullReviewRequestOptions,
   Repository,
 } from "gitea-js";
+import { assigneeLogins, mergeAssignees } from "../assignees.js";
 import { BODY_TRUNCATE_LIMIT, COMMENT_TRUNCATE_LIMIT, truncateBody } from "../body.js";
 import { requireBodySource, resolveBodySource } from "../body-source.js";
 import { createClient, type GiteaClient } from "../client.js";
@@ -47,9 +50,62 @@ commands:
   view       Show a single pull request's details
   checks     Show a pull request's CI check results
   create     Create a pull request
+  edit       Edit a pull request's title, body, labels, assignees, reviewers, milestone, or base
+  close      Close a pull request
+  reopen     Reopen a closed pull request
   comment    Post a comment on a pull request
 
 Run \`gitea-axi pr <command> --help\` for the flags of a command.
+`;
+
+export const PR_EDIT_HELP = `usage: gitea-axi pr edit <number> [flags]
+
+Edit a pull request in the current repository. At least one change is required.
+
+flags:
+  --title <text>              New title
+  --body <text>               New body
+  --body-file <path>          Read the new body from a file (mutually exclusive with --body)
+  --base <branch>             Change the base branch to merge into
+  --add-label <name>          Add a label by name (repeatable)
+  --remove-label <name>       Remove a label by name (repeatable, case-insensitive)
+  --add-assignee <login>      Add an assignee (repeatable)
+  --remove-assignee <login>   Remove an assignee (repeatable)
+  --add-reviewer <login>      Request a review from a user (repeatable)
+  --remove-reviewer <login>   Cancel a requested review (repeatable)
+  --milestone <name>          Assign a milestone by name (case-insensitive)
+  --help                      Show this help
+
+global flags:
+  -R, --repo <OWNER/NAME>     Override the repository detected from the git origin remote
+  --login <name>              Select a tea login profile by name
+`;
+
+export const PR_CLOSE_HELP = `usage: gitea-axi pr close <number> [flags]
+
+Close a pull request in the current repository. Closing an already-closed or
+merged pull request is a no-op.
+
+flags:
+  --comment <text>      Post a comment when closing
+  --help                Show this help
+
+global flags:
+  -R, --repo <OWNER/NAME>     Override the repository detected from the git origin remote
+  --login <name>              Select a tea login profile by name
+`;
+
+export const PR_REOPEN_HELP = `usage: gitea-axi pr reopen <number>
+
+Reopen a closed pull request in the current repository. Reopening an
+already-open pull request is a no-op.
+
+flags:
+  --help                Show this help
+
+global flags:
+  -R, --repo <OWNER/NAME>     Override the repository detected from the git origin remote
+  --login <name>              Select a tea login profile by name
 `;
 
 export const PR_VIEW_HELP = `usage: gitea-axi pr view <number> [flags]
@@ -905,6 +961,258 @@ async function prComment(deps: CliDeps, args: string[]): Promise<string> {
   });
 }
 
+/**
+ * The assignee list to PATCH: the pull request's current assignees with the
+ * requested additions applied and removals dropped (fetch-then-patch, ADR 0007).
+ * The current logins are read off a fresh GET, then merged by the shared
+ * {@link mergeAssignees}.
+ */
+async function resolvePullAssignees(
+  api: GiteaClient,
+  context: RepoContext,
+  number: number,
+  add: string[],
+  remove: string[],
+): Promise<string[]> {
+  const pull = await getPull(api, context, number);
+  return mergeAssignees(assigneeLogins(pull.assignees), add, remove);
+}
+
+/**
+ * The state to report for a pull request in the close no-op: `merged` marks a
+ * merged pull request (whose `state` Gitea reports as `closed`), otherwise the
+ * raw state stands.
+ */
+function pullState(pull: PullRequest): string {
+  return pull.merged ? "merged" : (pull.state ?? "closed");
+}
+
+async function prEdit(deps: CliDeps, args: string[]): Promise<string> {
+  if (args.includes("--help")) {
+    return PR_EDIT_HELP;
+  }
+  const { flags, lists, positionals } = parseFlags(
+    args,
+    {
+      "--title": { takesValue: true },
+      "--body": { takesValue: true },
+      "--body-file": { takesValue: true },
+      "--base": { takesValue: true },
+      "--add-label": { takesValue: true, repeatable: true },
+      "--remove-label": { takesValue: true, repeatable: true },
+      "--add-assignee": { takesValue: true, repeatable: true },
+      "--remove-assignee": { takesValue: true, repeatable: true },
+      "--add-reviewer": { takesValue: true, repeatable: true },
+      "--remove-reviewer": { takesValue: true, repeatable: true },
+      "--milestone": { takesValue: true },
+    },
+    "pr edit",
+  );
+  const number = parsePositionalNumber(positionals, "pr edit", "pull request");
+  const title = flagValue(flags, "--title");
+  const body = resolveBodySource(deps, flags, "pr edit");
+  const base = flagValue(flags, "--base");
+  const milestoneName = flagValue(flags, "--milestone");
+  const addLabels = lists["--add-label"] ?? [];
+  const removeLabels = lists["--remove-label"] ?? [];
+  const addAssignees = lists["--add-assignee"] ?? [];
+  const removeAssignees = lists["--remove-assignee"] ?? [];
+  const addReviewers = lists["--add-reviewer"] ?? [];
+  const removeReviewers = lists["--remove-reviewer"] ?? [];
+
+  const changesAssignees = addAssignees.length > 0 || removeAssignees.length > 0;
+  const nothingToDo =
+    title === undefined &&
+    body === undefined &&
+    base === undefined &&
+    milestoneName === undefined &&
+    addLabels.length === 0 &&
+    removeLabels.length === 0 &&
+    !changesAssignees &&
+    addReviewers.length === 0 &&
+    removeReviewers.length === 0;
+  if (nothingToDo) {
+    throw axiError("pr edit requires at least one change", "VALIDATION_ERROR", [
+      "Run `gitea-axi pr edit --help` to see the fields you can change",
+    ]);
+  }
+
+  const context = await resolveRepoContext(deps);
+  const api = createClient(context);
+
+  // Name resolution runs before any mutation: whether a milestone or label name
+  // is real does not depend on the pull request's state, so a typo is reported
+  // before a single change lands, never leaving the pull request half-edited.
+  const milestoneId =
+    milestoneName !== undefined ? await resolveMilestoneId(api, context, milestoneName) : undefined;
+  const removeLabelIds = await resolveLabelIds(api, context, removeLabels);
+
+  // Title, body, base, milestone, and the recomputed assignee list travel in one
+  // PATCH — the reviewers are the exception, having no field on this body.
+  const payload: EditPullRequestOption = {};
+  if (title !== undefined) {
+    payload.title = title;
+  }
+  if (body !== undefined) {
+    payload.body = body;
+  }
+  if (base !== undefined) {
+    payload.base = base;
+  }
+  if (milestoneId !== undefined) {
+    payload.milestone = milestoneId;
+  }
+  if (changesAssignees) {
+    payload.assignees = await resolvePullAssignees(
+      api,
+      context,
+      number,
+      addAssignees,
+      removeAssignees,
+    );
+  }
+  if (Object.keys(payload).length > 0) {
+    try {
+      await api.repos.repoEditPullRequest(context.owner, context.name, number, payload);
+    } catch (error) {
+      throw classifyHttpError(error);
+    }
+  }
+
+  // Label mutations use Gitea's dedicated endpoints (idempotent). `--add-label`
+  // passes names straight through — Gitea accepts them there, no lookup needed —
+  // while `--remove-label` resolved to ids above (mirrors `issue edit`).
+  if (addLabels.length > 0) {
+    try {
+      await api.repos.issueAddLabel(context.owner, context.name, number, { labels: addLabels });
+    } catch (error) {
+      throw classifyHttpError(error);
+    }
+  }
+  for (const id of removeLabelIds) {
+    try {
+      await api.repos.issueRemoveLabel(context.owner, context.name, number, id);
+    } catch (error) {
+      // The label exists in the repo but is not applied to this pull request:
+      // Gitea answers 404, and the caller's intent (label absent) already holds,
+      // so it is silent success rather than an error.
+      if (httpStatus(error) === 404) {
+        continue;
+      }
+      throw classifyHttpError(error);
+    }
+  }
+
+  // Reviewer mutations go through Gitea's dedicated requested-reviewers endpoints
+  // — `EditPullRequestOption` has no reviewers field, so fetch-then-patch is
+  // structurally impossible here (ADR 0007 amendment). Each direction is one call
+  // carrying the whole list.
+  if (addReviewers.length > 0) {
+    const options: PullReviewRequestOptions = { reviewers: addReviewers };
+    try {
+      await api.repos.repoCreatePullReviewRequests(context.owner, context.name, number, options);
+    } catch (error) {
+      throw classifyHttpError(error);
+    }
+  }
+  if (removeReviewers.length > 0) {
+    const options: PullReviewRequestOptions = { reviewers: removeReviewers };
+    try {
+      await api.repos.repoDeletePullReviewRequests(context.owner, context.name, number, options);
+    } catch (error) {
+      throw classifyHttpError(error);
+    }
+  }
+
+  // The mutation ran, so the block is named for the action, not the entity.
+  return renderDetail({
+    noun: "edited",
+    item: { number, status: "ok" },
+    help: [suggestCommand(context, `pr view ${number}`, "to see the pull request in full")],
+  });
+}
+
+async function prClose(deps: CliDeps, args: string[]): Promise<string> {
+  if (args.includes("--help")) {
+    return PR_CLOSE_HELP;
+  }
+  const { flags, positionals } = parseFlags(args, { "--comment": { takesValue: true } }, "pr close");
+  const number = parsePositionalNumber(positionals, "pr close", "pull request");
+  const comment = flagValue(flags, "--comment");
+
+  const context = await resolveRepoContext(deps);
+  const api = createClient(context);
+
+  // Read the current state first: an already-closed or merged pull request
+  // short-circuits to the idempotent no-op below rather than issuing a redundant
+  // PATCH. A merged pull request has state `closed`, so this catches both.
+  const pull = await getPull(api, context, number);
+  if (pull.state === "closed") {
+    return renderDetail({
+      noun: "pull_request",
+      item: { number, state: pullState(pull), already: true },
+      help: [suggestCommand(context, `pr reopen ${number}`, "to reopen this pull request")],
+    });
+  }
+
+  try {
+    await api.repos.repoEditPullRequest(context.owner, context.name, number, { state: "closed" });
+  } catch (error) {
+    throw classifyHttpError(error);
+  }
+
+  // The comment is a second call after the close lands. A failure here is
+  // surfaced, never swallowed: the pull request is closed, but the caller must
+  // learn that the comment they asked for did not post.
+  if (comment !== undefined) {
+    try {
+      await api.repos.issueCreateComment(context.owner, context.name, number, { body: comment });
+    } catch (error) {
+      throw classifyHttpError(error);
+    }
+  }
+
+  return renderDetail({
+    noun: "closed",
+    item: { number, status: "ok" },
+    help: [suggestCommand(context, `pr reopen ${number}`, "to reopen this pull request")],
+  });
+}
+
+async function prReopen(deps: CliDeps, args: string[]): Promise<string> {
+  if (args.includes("--help")) {
+    return PR_REOPEN_HELP;
+  }
+  const { positionals } = parseFlags(args, {}, "pr reopen");
+  const number = parsePositionalNumber(positionals, "pr reopen", "pull request");
+
+  const context = await resolveRepoContext(deps);
+  const api = createClient(context);
+
+  // Read the current state first: an already-open pull request short-circuits to
+  // the idempotent no-op below rather than issuing a redundant PATCH.
+  const pull = await getPull(api, context, number);
+  if (pull.state === "open") {
+    return renderDetail({
+      noun: "pull_request",
+      item: { number, state: "open", already: true },
+      help: [suggestCommand(context, `pr close ${number}`, "to close this pull request")],
+    });
+  }
+
+  try {
+    await api.repos.repoEditPullRequest(context.owner, context.name, number, { state: "open" });
+  } catch (error) {
+    throw classifyHttpError(error);
+  }
+
+  return renderDetail({
+    noun: "reopened",
+    item: { number, status: "ok" },
+    help: [suggestCommand(context, `pr view ${number}`, "to see the pull request in full")],
+  });
+}
+
 export function prCommand(deps: CliDeps) {
   return async (args: string[]): Promise<string> => {
     const [subcommand, ...rest] = args;
@@ -922,6 +1230,15 @@ export function prCommand(deps: CliDeps) {
     }
     if (subcommand === "create") {
       return prCreate(deps, rest);
+    }
+    if (subcommand === "edit") {
+      return prEdit(deps, rest);
+    }
+    if (subcommand === "close") {
+      return prClose(deps, rest);
+    }
+    if (subcommand === "reopen") {
+      return prReopen(deps, rest);
     }
     if (subcommand === "comment") {
       return prComment(deps, rest);

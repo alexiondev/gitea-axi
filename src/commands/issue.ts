@@ -1,4 +1,5 @@
 import type { Comment, CreateIssueOption, EditIssueOption, Issue, IssueMeta } from "gitea-js";
+import { assigneeLogins, mergeAssignees } from "../assignees.js";
 import { BODY_TRUNCATE_LIMIT, truncateBody } from "../body.js";
 import { requireBodySource, resolveBodySource } from "../body-source.js";
 import { createClient, type GiteaClient } from "../client.js";
@@ -702,9 +703,9 @@ async function issueComment(deps: CliDeps, args: string[]): Promise<string> {
 
 /**
  * The assignee list to PATCH: the issue's current assignees with the requested
- * additions appended and removals dropped (fetch-then-patch, ADR 0007). Matching
- * is case-insensitive and the result is de-duplicated, order-preserving, so a
- * login that is already assigned never lands in the list twice.
+ * additions applied and removals dropped (fetch-then-patch, ADR 0007). The
+ * current logins are read off a fresh GET, then merged by the shared
+ * {@link mergeAssignees}.
  */
 async function resolveAssignees(
   api: GiteaClient,
@@ -714,26 +715,7 @@ async function resolveAssignees(
   remove: string[],
 ): Promise<string[]> {
   const issue = await getIssue(api, context, number);
-  const removeSet = new Set(remove.map((login) => login.toLowerCase()));
-  const seen = new Set<string>();
-  const result: string[] = [];
-  const push = (login: string): void => {
-    const key = login.toLowerCase();
-    if (removeSet.has(key) || seen.has(key)) {
-      return;
-    }
-    seen.add(key);
-    result.push(login);
-  };
-  for (const assignee of issue.assignees ?? []) {
-    if (assignee.login) {
-      push(assignee.login);
-    }
-  }
-  for (const login of add) {
-    push(login);
-  }
-  return result;
+  return mergeAssignees(assigneeLogins(issue.assignees), add, remove);
 }
 
 async function issueEdit(deps: CliDeps, args: string[]): Promise<string> {
