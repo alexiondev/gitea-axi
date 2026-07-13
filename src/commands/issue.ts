@@ -1,4 +1,4 @@
-import type { Comment, CreateIssueOption, EditIssueOption, Issue } from "gitea-js";
+import type { Comment, CreateIssueOption, EditIssueOption, Issue, IssueMeta } from "gitea-js";
 import { BODY_TRUNCATE_LIMIT, truncateBody } from "../body.js";
 import { requireBodySource, resolveBodySource } from "../body-source.js";
 import { createClient, type GiteaClient } from "../client.js";
@@ -19,6 +19,7 @@ import {
   flagValue,
   parseEnumFlag,
   parseFlags,
+  parseIssueNumber,
   parsePositionalNumber,
   parsePositiveInt,
   splitFlag,
@@ -41,8 +42,54 @@ commands:
   pin        Pin an issue to the repository
   unpin      Unpin an issue
   comment    Post a comment on an issue or pull request
+  blocks     Manage the issues this issue blocks (Gitea-specific)
+  blocked-by Manage the issues that block this issue (Gitea-specific)
 
 Run \`gitea-axi issue <command> --help\` for the flags of a command.
+`;
+
+export const ISSUE_BLOCKS_HELP = `usage: gitea-axi issue blocks <list|add|remove> <number> [target]
+
+Manage the issues that an issue blocks — downstream dependents that cannot
+proceed until it is resolved (Gitea-specific; no gh-axi equivalent).
+
+commands:
+  list <n>              List the issues blocked by issue <n>
+  add <n> <target>      Make issue <n> block issue <target>
+  remove <n> <target>   Remove the blocking relationship
+
+Adding a relationship that already exists is a no-op that reports \`already: true\`;
+removing one that does not exist succeeds silently. Self-reference and cycle
+rejections from Gitea surface as VALIDATION_ERROR.
+
+flags:
+  --help                Show this help
+
+global flags:
+  -R, --repo <OWNER/NAME>     Override the repository detected from the git origin remote
+  --login <name>              Select a tea login profile by name
+`;
+
+export const ISSUE_BLOCKED_BY_HELP = `usage: gitea-axi issue blocked-by <list|add|remove> <number> [blocker]
+
+Manage the issues that block an issue — upstream blockers that must be resolved
+before it can proceed (Gitea-specific; no gh-axi equivalent).
+
+commands:
+  list <n>              List the issues that block issue <n>
+  add <n> <blocker>     Make issue <n> depend on issue <blocker>
+  remove <n> <blocker>  Remove the dependency
+
+Adding a relationship that already exists is a no-op that reports \`already: true\`;
+removing one that does not exist succeeds silently. Self-reference and cycle
+rejections from Gitea surface as VALIDATION_ERROR.
+
+flags:
+  --help                Show this help
+
+global flags:
+  -R, --repo <OWNER/NAME>     Override the repository detected from the git origin remote
+  --login <name>              Select a tea login profile by name
 `;
 
 export const ISSUE_EDIT_HELP = `usage: gitea-axi issue edit <number> [flags]
@@ -983,6 +1030,293 @@ async function issueUnpin(deps: CliDeps, args: string[]): Promise<string> {
   });
 }
 
+/**
+ * A response page from a relationship-listing endpoint, in the shape
+ * {@link fetchAllPages} consumes. Both `/blocks` and `/dependencies` return
+ * `Issue[]` with the standard pagination headers.
+ */
+interface RelationshipPage {
+  data?: Issue[];
+  headers: Headers;
+}
+
+/**
+ * One of the two Gitea-specific dependency directions. `blocks` and `blocked-by`
+ * are the same three operations (`list`/`add`/`remove`) over two different
+ * endpoints, so a single implementation is parameterised by this config: the
+ * endpoint calls, the output block/field names the spec fixes, and the noun the
+ * second positional carries in errors and help.
+ */
+interface DependencyGroup {
+  /** Subcommand as typed: "blocks" | "blocked-by". */
+  command: string;
+  /** What the second positional identifies: "target" | "blocker". */
+  targetNoun: string;
+  /** Output block name for `list`. */
+  listNoun: string;
+  /** Output entity name for `add`/`remove`. */
+  mutationNoun: string;
+  /** Key naming the related issue in `add`/`remove` output. */
+  targetKey: string;
+  /** Help text for the group. */
+  help: string;
+  listPage: (
+    api: GiteaClient,
+    context: RepoContext,
+    index: number,
+    page: number,
+    limit: number,
+  ) => Promise<RelationshipPage>;
+  add: (
+    api: GiteaClient,
+    context: RepoContext,
+    index: number,
+    meta: IssueMeta,
+  ) => Promise<unknown>;
+  remove: (
+    api: GiteaClient,
+    context: RepoContext,
+    index: number,
+    meta: IssueMeta,
+  ) => Promise<unknown>;
+}
+
+// The identifying essentials of a related issue — enough to recognise it without
+// the noise of a full issue listing.
+const RELATIONSHIP_FIELDS: FieldDef<Issue>[] = [
+  pluck("number"),
+  pluck("title"),
+  lowercased("state"),
+];
+
+const BLOCKS_GROUP: DependencyGroup = {
+  command: "blocks",
+  targetNoun: "target",
+  listNoun: "blocked_issues",
+  mutationNoun: "blocks",
+  targetKey: "blocks",
+  help: ISSUE_BLOCKS_HELP,
+  listPage: (api, context, index, page, limit) =>
+    api.repos.issueListBlocks(context.owner, context.name, String(index), { page, limit }),
+  add: (api, context, index, meta) =>
+    api.repos.issueCreateIssueBlocking(context.owner, context.name, String(index), meta),
+  remove: (api, context, index, meta) =>
+    api.repos.issueRemoveIssueBlocking(context.owner, context.name, String(index), meta),
+};
+
+const BLOCKED_BY_GROUP: DependencyGroup = {
+  command: "blocked-by",
+  targetNoun: "blocker",
+  listNoun: "blocking_issues",
+  mutationNoun: "blocked_by",
+  targetKey: "blocked_by",
+  help: ISSUE_BLOCKED_BY_HELP,
+  listPage: (api, context, index, page, limit) =>
+    api.repos.issueListIssueDependencies(context.owner, context.name, String(index), {
+      page,
+      limit,
+    }),
+  add: (api, context, index, meta) =>
+    api.repos.issueCreateIssueDependencies(context.owner, context.name, String(index), meta),
+  remove: (api, context, index, meta) =>
+    api.repos.issueRemoveIssueDependencies(context.owner, context.name, String(index), meta),
+};
+
+/**
+ * Parse the `<number> <target>` positionals shared by `add` and `remove`. Both
+ * arguments are required issue numbers; a missing or extra one is a
+ * VALIDATION_ERROR naming what is expected.
+ */
+function parseIssueAndTarget(
+  positionals: string[],
+  command: string,
+  targetNoun: string,
+): { issue: number; target: number } {
+  const helpSuggestion = [`Run \`gitea-axi ${command} --help\` to see available flags`];
+  if (positionals.length === 0) {
+    throw axiError(`${command} requires an issue number`, "VALIDATION_ERROR", [
+      `Run \`gitea-axi ${command} <number> <${targetNoun}>\``,
+    ]);
+  }
+  if (positionals.length === 1) {
+    throw axiError(`${command} requires a ${targetNoun} issue number`, "VALIDATION_ERROR", [
+      `Run \`gitea-axi ${command} <number> <${targetNoun}>\``,
+    ]);
+  }
+  if (positionals.length > 2) {
+    throw axiError(`Unexpected argument: ${positionals[2]}`, "VALIDATION_ERROR", helpSuggestion);
+  }
+  return {
+    issue: parseIssueNumber(positionals[0]!, "issue", helpSuggestion),
+    target: parseIssueNumber(positionals[1]!, targetNoun, helpSuggestion),
+  };
+}
+
+/**
+ * Every related issue currently on this side of the relationship. Fully
+ * paginated so the fetch-first idempotency check (add) and the
+ * remove-if-present check (remove) see the complete set, and so `list`'s count
+ * describes the whole set rather than a first page (see ADR 0005).
+ */
+async function fetchRelationships(
+  api: GiteaClient,
+  context: RepoContext,
+  group: DependencyGroup,
+  index: number,
+): Promise<Issue[]> {
+  try {
+    const result = await fetchAllPages<Issue>((page, limit) =>
+      group.listPage(api, context, index, page, limit),
+    );
+    return result.items;
+  } catch (error) {
+    throw classifyHttpError(error);
+  }
+}
+
+async function listRelationships(
+  deps: CliDeps,
+  args: string[],
+  group: DependencyGroup,
+): Promise<string> {
+  const command = `issue ${group.command} list`;
+  const { positionals } = parseFlags(args, {}, command);
+  const number = parsePositionalNumber(positionals, command, "issue");
+
+  const context = await resolveRepoContext(deps);
+  const api = createClient(context);
+  const issues = await fetchRelationships(api, context, group, number);
+
+  const now = new Date();
+  const rows = issues.map((issue) => extractRow(issue, RELATIONSHIP_FIELDS, { now }));
+  return renderList({
+    noun: group.listNoun,
+    rows,
+    // The whole set is in hand, so its own size is the total and nothing is
+    // withheld by a limit.
+    countLine: formatCountLine(rows.length, rows.length, false),
+    help: [
+      suggestCommand(
+        context,
+        `issue ${group.command} add ${number} <${group.targetNoun}>`,
+        `to add a ${group.command} relationship`,
+      ),
+    ],
+  });
+}
+
+async function addRelationship(
+  deps: CliDeps,
+  args: string[],
+  group: DependencyGroup,
+): Promise<string> {
+  const command = `issue ${group.command} add`;
+  const { positionals } = parseFlags(args, {}, command);
+  const { issue, target } = parseIssueAndTarget(positionals, command, group.targetNoun);
+
+  const context = await resolveRepoContext(deps);
+  const api = createClient(context);
+
+  // Fetch-first idempotency check: an existing relationship is reported as a
+  // no-op rather than re-POSTed. A nonexistent issue surfaces here as its own
+  // ISSUE_NOT_FOUND, before any mutation is attempted.
+  const existing = await fetchRelationships(api, context, group, issue);
+  const help = [
+    suggestCommand(context, `issue ${group.command} list ${issue}`, "to see the current relationships"),
+  ];
+  if (existing.some((related) => related.number === target)) {
+    return renderDetail({
+      noun: group.mutationNoun,
+      item: { issue, [group.targetKey]: target, already: true },
+      help,
+    });
+  }
+
+  // The body names the OTHER issue; the issue in the path is `issue`. Self-
+  // reference and cycle rejections come back from Gitea as 422, which
+  // classifyHttpError maps to VALIDATION_ERROR with the server's own message.
+  const meta: IssueMeta = { owner: context.owner, repo: context.name, index: target };
+  try {
+    await group.add(api, context, issue, meta);
+  } catch (error) {
+    throw classifyHttpError(error);
+  }
+
+  return renderDetail({
+    noun: group.mutationNoun,
+    item: { issue, [group.targetKey]: target },
+    help,
+  });
+}
+
+async function removeRelationship(
+  deps: CliDeps,
+  args: string[],
+  group: DependencyGroup,
+): Promise<string> {
+  const command = `issue ${group.command} remove`;
+  const { positionals } = parseFlags(args, {}, command);
+  const { issue, target } = parseIssueAndTarget(positionals, command, group.targetNoun);
+
+  const context = await resolveRepoContext(deps);
+  const api = createClient(context);
+
+  // Fetch-first: a relationship that is not present is an idempotent no-op —
+  // the caller's intent (relationship absent) already holds, so no DELETE is
+  // sent and the output marks it `already: true` (per the action/entity-block
+  // convention: a no-op reports the already-reached state rather than claiming
+  // an action it did not perform, mirroring `add`). A nonexistent issue still
+  // surfaces here as ISSUE_NOT_FOUND.
+  const existing = await fetchRelationships(api, context, group, issue);
+  const help = [
+    suggestCommand(context, `issue ${group.command} list ${issue}`, "to see the current relationships"),
+  ];
+  if (!existing.some((related) => related.number === target)) {
+    return renderDetail({
+      noun: group.mutationNoun,
+      item: { issue, [group.targetKey]: target, already: true },
+      help,
+    });
+  }
+
+  const meta: IssueMeta = { owner: context.owner, repo: context.name, index: target };
+  try {
+    await group.remove(api, context, issue, meta);
+  } catch (error) {
+    throw classifyHttpError(error);
+  }
+
+  return renderDetail({
+    noun: group.mutationNoun,
+    item: { issue, [group.targetKey]: target, removed: true },
+    help,
+  });
+}
+
+/** Dispatch the `list`/`add`/`remove` sub-operation of a dependency group. */
+async function issueDependencyGroup(
+  deps: CliDeps,
+  args: string[],
+  group: DependencyGroup,
+): Promise<string> {
+  const [operation, ...rest] = args;
+  if (!operation || operation === "--help") {
+    return group.help;
+  }
+  if (operation === "list") {
+    return listRelationships(deps, rest, group);
+  }
+  if (operation === "add") {
+    return addRelationship(deps, rest, group);
+  }
+  if (operation === "remove") {
+    return removeRelationship(deps, rest, group);
+  }
+  throw axiError(`Unknown issue ${group.command} command: ${operation}`, "VALIDATION_ERROR", [
+    `Run \`gitea-axi issue ${group.command} --help\` to see available operations`,
+  ]);
+}
+
 export function issueCommand(deps: CliDeps) {
   return async (args: string[]): Promise<string> => {
     const [subcommand, ...rest] = args;
@@ -1018,6 +1352,12 @@ export function issueCommand(deps: CliDeps) {
     }
     if (subcommand === "comment") {
       return issueComment(deps, rest);
+    }
+    if (subcommand === "blocks") {
+      return issueDependencyGroup(deps, rest, BLOCKS_GROUP);
+    }
+    if (subcommand === "blocked-by") {
+      return issueDependencyGroup(deps, rest, BLOCKED_BY_GROUP);
     }
     throw axiError(`Unknown issue command: ${subcommand}`, "VALIDATION_ERROR", [
       "Run `gitea-axi issue --help` to see available issue commands",

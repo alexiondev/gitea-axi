@@ -130,6 +130,24 @@ function withArticle(noun: string): string {
 }
 
 /**
+ * Validate a single raw argument as a positive issue number. `noun` names what
+ * the number identifies ("issue", "target") in the error; `suggestions` carries
+ * the caller's help line. Shared by the single-positional parser and the
+ * two-positional dependency parser so the rule and its message live in one place.
+ */
+export function parseIssueNumber(raw: string, noun: string, suggestions: string[]): number {
+  const number = Number(raw);
+  if (!Number.isInteger(number) || number < 1) {
+    throw axiError(
+      `Invalid ${noun} number: ${raw} (expected a positive integer)`,
+      "VALIDATION_ERROR",
+      suggestions,
+    );
+  }
+  return number;
+}
+
+/**
  * Parse the single positional number of a `<command> <number>` invocation.
  * `noun` names what the number identifies ("issue", "pull request") and appears
  * in the errors; the parsing itself is identical for both.
@@ -150,16 +168,7 @@ export function parsePositionalNumber(
   if (positionals.length > 1) {
     throw axiError(`Unexpected argument: ${positionals[1]}`, "VALIDATION_ERROR", helpSuggestion);
   }
-  const raw = positionals[0]!;
-  const number = Number(raw);
-  if (!Number.isInteger(number) || number < 1) {
-    throw axiError(
-      `Invalid ${noun} number: ${raw} (expected a positive integer)`,
-      "VALIDATION_ERROR",
-      helpSuggestion,
-    );
-  }
-  return number;
+  return parseIssueNumber(positionals[0]!, noun, helpSuggestion);
 }
 
 export function parseFlags(
