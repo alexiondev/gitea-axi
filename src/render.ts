@@ -45,6 +45,17 @@ export function renderList(options: RenderListOptions): string {
   return [options.countLine, body, encode({ help: options.help })].join("\n");
 }
 
+/**
+ * A literal `noun: value` line followed by the help block — for output whose
+ * entity is a single line rather than a field map or a list (e.g. the no-CI
+ * `checks:` message). The value is emitted verbatim, not re-encoded: TOON reads
+ * a string scalar to end of line, so a comma-bearing message stays unquoted,
+ * matching the way a summary line stands above a list block.
+ */
+export function renderScalar(noun: string, value: string, help: string[]): string {
+  return [`${noun}: ${value}`, encode({ help })].join("\n");
+}
+
 /** A secondary list block appended below a detail entity (e.g. comments). */
 export interface DetailBlock {
   noun: string;

@@ -1,7 +1,15 @@
-import type { Comment, CreatePullRequestOption, PullRequest, Repository } from "gitea-js";
+import type {
+  Comment,
+  CreatePullRequestOption,
+  PullRequest,
+  PullReview,
+  PullReviewComment,
+  Repository,
+} from "gitea-js";
+import { BODY_TRUNCATE_LIMIT, COMMENT_TRUNCATE_LIMIT, truncateBody } from "../body.js";
 import { requireBodySource, resolveBodySource } from "../body-source.js";
 import { createClient, type GiteaClient } from "../client.js";
-import { COMMENT_FLAGS, commentItem } from "../comment.js";
+import { COMMENT_FLAGS, commentItem, commentRows } from "../comment.js";
 import { resolveRepoContext, type RepoContext } from "../context.js";
 import type { CliDeps } from "../deps.js";
 import { axiError, classifyHttpError, httpStatus } from "../errors.js";
@@ -23,21 +31,53 @@ import {
   parsePositiveInt,
   splitFlag,
 } from "../flags.js";
+import { fetchChecks } from "../checks.js";
 import { currentBranch } from "../git.js";
 import { resolveLabelIds, resolveMilestoneId } from "../lookup.js";
 import { fetchAllPages, readTotalCount } from "../paginate.js";
-import { formatCountLine, renderDetail, renderList } from "../render.js";
-import { fetchReviewDecision } from "../review.js";
+import { formatCountLine, renderDetail, renderList, renderScalar, type DetailBlock } from "../render.js";
+import { fetchReviewComments, fetchReviewDecision, fetchReviews } from "../review.js";
 import { suggestCommand } from "../suggestions.js";
+import { relativeTime } from "../time.js";
 
 export const PR_HELP = `usage: gitea-axi pr <command> [flags]
 
 commands:
   list       List pull requests in the current repository
+  view       Show a single pull request's details
+  checks     Show a pull request's CI check results
   create     Create a pull request
   comment    Post a comment on a pull request
 
 Run \`gitea-axi pr <command> --help\` for the flags of a command.
+`;
+
+export const PR_VIEW_HELP = `usage: gitea-axi pr view <number> [flags]
+
+Show a single pull request, including its CI checks and review summary.
+
+flags:
+  --comments   Render every comment in full (bodies truncated at 800 chars)
+  --reviews    Render every review with its inline comments (Gitea official/stale fields)
+  --full       Suppress all truncation of the PR body and comment bodies
+  --help       Show this help
+
+global flags:
+  -R, --repo <OWNER/NAME>     Override the repository detected from the git origin remote
+  --login <name>              Select a tea login profile by name
+`;
+
+export const PR_CHECKS_HELP = `usage: gitea-axi pr checks <number>
+
+Show the CI check results for a pull request, derived from its head commit's
+combined status.
+
+flags:
+  --help                Show this help
+
+global flags:
+  -R, --repo <OWNER/NAME>     Override the repository detected from the git origin remote
+  --login <name>              Select a tea login profile by name
 `;
 
 export const PR_LIST_HELP = `usage: gitea-axi pr list [flags]
@@ -129,6 +169,17 @@ const PR_LIST_EXTRA_FIELDS: Record<string, FieldDef<PullRequest>> = {
   mergedAt: relativeTimeField("merged_at", "merged_at"),
   url: pluck("url", "html_url"),
 };
+
+// The default `pr view` fields that reuse the shared declarative extraction;
+// `merged`, `checks`, `body`, `comment_count`, and `review_count` are handled
+// bespokely in buildPrDetail, since each needs a computed or fetched value.
+const PR_VIEW_FIELDS: FieldDef<PullRequest>[] = [
+  pluck("number"),
+  pluck("title"),
+  lowercased("state"),
+  pluck("author", "user.login"),
+  boolText("draft"),
+];
 
 const PR_STATES = ["open", "closed", "all"] as const;
 type PrState = (typeof PR_STATES)[number];
@@ -479,6 +530,237 @@ function pullNumber(pull: PullRequest): number {
   return pull.number;
 }
 
+/** Fetch a single pull request, mapping any HTTP failure to an AxiError. */
+async function getPull(api: GiteaClient, context: RepoContext, number: number): Promise<PullRequest> {
+  try {
+    const response = await api.repos.repoGetPullRequest(context.owner, context.name, number);
+    return response.data;
+  } catch (error) {
+    throw classifyHttpError(error);
+  }
+}
+
+/**
+ * The PR head commit SHA, the ref the combined-status fetch keys on. Every real
+ * pull request has one; a response without it is treated as the broken answer it
+ * is, rather than inventing a SHA to fetch a status for.
+ */
+function headSha(pull: PullRequest): string {
+  const sha = pull.head?.sha;
+  if (!sha) {
+    throw axiError("Gitea returned a pull request with no head SHA", "UNKNOWN");
+  }
+  return sha;
+}
+
+interface PrDetailOptions {
+  host: string;
+  full: boolean;
+  withComments: boolean;
+  withReviews: boolean;
+  checksSummary: string;
+  reviewCount: number;
+  now: Date;
+}
+
+function buildPrDetail(pull: PullRequest, options: PrDetailOptions): Record<string, unknown> {
+  const row = extractRow(pull, PR_VIEW_FIELDS, { now: options.now });
+  // gh-axi renders `merged` as `no` when open, or the merge time once merged.
+  row.merged = pull.merged ? relativeTime(pull.merged_at, options.now) : "no";
+  row.checks = options.checksSummary;
+  const body = pull.body ?? "";
+  row.body = options.full ? body : truncateBody(body, BODY_TRUNCATE_LIMIT, options.host);
+  // Each count scalar is replaced by its full block when the matching flag is
+  // passed, mirroring `issue view`'s comment_count (ADR: no redundant scalar).
+  if (!options.withComments) {
+    const count = pull.comments ?? 0;
+    row.comment_count = count > 0 ? `${count} — use --comments to see full comments` : 0;
+  }
+  if (!options.withReviews) {
+    row.review_count =
+      options.reviewCount > 0
+        ? `${options.reviewCount} — use --reviews to see full reviews`
+        : 0;
+  }
+  return row;
+}
+
+function prViewSuggestions(
+  context: RepoContext,
+  number: number,
+  options: {
+    withComments: boolean;
+    commentCount: number;
+    withReviews: boolean;
+    reviewCount: number;
+    bodyAbbreviated: boolean;
+  },
+): string[] {
+  const help: string[] = [];
+  if (!options.withComments && options.commentCount > 0) {
+    help.push(suggestCommand(context, `pr view ${number} --comments`, "to see full comments"));
+  }
+  if (!options.withReviews && options.reviewCount > 0) {
+    help.push(suggestCommand(context, `pr view ${number} --reviews`, "to see full reviews"));
+  }
+  if (options.bodyAbbreviated) {
+    help.push(suggestCommand(context, `pr view ${number} --full`, "to see the complete body"));
+  }
+  if (help.length === 0) {
+    help.push(suggestCommand(context, `pr view ${number} --help`, "to see all pr view flags"));
+  }
+  return help;
+}
+
+interface ReviewRowsOptions {
+  host: string;
+  full: boolean;
+  now: Date;
+}
+
+/**
+ * The `reviews` block rows for `--reviews`: each review with its Gitea-specific
+ * `official`/`stale` flags and its inline (diff) comments. One comments fetch per
+ * review, all in flight at once; review and comment bodies truncate at 800 chars
+ * unless `--full` is set.
+ */
+async function buildReviewRows(
+  api: GiteaClient,
+  context: RepoContext,
+  number: number,
+  reviews: PullReview[],
+  options: ReviewRowsOptions,
+): Promise<Record<string, unknown>[]> {
+  const commentLists = await Promise.all(
+    reviews.map((review) =>
+      review.id !== undefined
+        ? fetchReviewComments(api, context, number, review.id)
+        : Promise.resolve<PullReviewComment[]>([]),
+    ),
+  );
+  const truncate = (text: string): string =>
+    options.full ? text : truncateBody(text, COMMENT_TRUNCATE_LIMIT, options.host);
+  return reviews.map((review, index) => ({
+    author: review.user?.login ?? "",
+    state: (review.state ?? "").toLowerCase(),
+    official: review.official ? "yes" : "no",
+    stale: review.stale ? "yes" : "no",
+    body: truncate(review.body ?? ""),
+    comments: commentLists[index]!.map((comment) => ({
+      author: comment.user?.login ?? "",
+      path: comment.path ?? "",
+      body: truncate(comment.body ?? ""),
+    })),
+  }));
+}
+
+async function prView(deps: CliDeps, args: string[]): Promise<string> {
+  if (args.includes("--help")) {
+    return PR_VIEW_HELP;
+  }
+  const { flags, positionals } = parseFlags(
+    args,
+    {
+      "--comments": { takesValue: false },
+      "--reviews": { takesValue: false },
+      "--full": { takesValue: false },
+    },
+    "pr view",
+  );
+  const number = parsePositionalNumber(positionals, "pr view", "pull request");
+  const full = flags["--full"] === true;
+  const withComments = flags["--comments"] === true;
+  const withReviews = flags["--reviews"] === true;
+
+  const context = await resolveRepoContext(deps);
+  const api = createClient(context);
+
+  // The PR and its reviews are fetched in parallel; the combined status then
+  // needs the head SHA, so it follows once the PR is in hand — three calls
+  // always, so `checks` and `review_count` are in the default output (ADR 0006).
+  const [pull, reviews] = await Promise.all([
+    getPull(api, context, number),
+    fetchReviews(api, context, number),
+  ]);
+  const checksResult = await fetchChecks(api, context, headSha(pull));
+
+  const now = new Date();
+  const item = buildPrDetail(pull, {
+    host: context.host,
+    full,
+    withComments,
+    withReviews,
+    checksSummary: checksResult.summary,
+    reviewCount: reviews.length,
+    now,
+  });
+
+  const blocks: DetailBlock[] = [];
+  if (withComments) {
+    // PRs share the issue-comment endpoint, so their comments come from
+    // GET /issues/{n}/comments — the same fetch `issue view --comments` makes.
+    let comments: Comment[];
+    try {
+      const response = await api.repos.issueGetComments(context.owner, context.name, number);
+      comments = response.data ?? [];
+    } catch (error) {
+      throw classifyHttpError(error);
+    }
+    blocks.push({ noun: "comments", rows: commentRows(comments, { host: context.host, full, now }) });
+  }
+  if (withReviews) {
+    blocks.push({
+      noun: "reviews",
+      rows: await buildReviewRows(api, context, number, reviews, { host: context.host, full, now }),
+    });
+  }
+
+  const commentCount = pull.comments ?? 0;
+  const bodyAbbreviated = item.body !== (pull.body ?? "");
+  return renderDetail({
+    noun: "pull_request",
+    item,
+    blocks,
+    help: prViewSuggestions(context, number, {
+      withComments,
+      commentCount,
+      withReviews,
+      reviewCount: reviews.length,
+      bodyAbbreviated,
+    }),
+  });
+}
+
+async function prChecks(deps: CliDeps, args: string[]): Promise<string> {
+  if (args.includes("--help")) {
+    return PR_CHECKS_HELP;
+  }
+  const { positionals } = parseFlags(args, {}, "pr checks");
+  const number = parsePositionalNumber(positionals, "pr checks", "pull request");
+
+  const context = await resolveRepoContext(deps);
+  const api = createClient(context);
+
+  // The combined status is keyed on the head SHA, so the PR is fetched first to
+  // learn it (GET /pulls/{n}), then its head commit's combined status.
+  const pull = await getPull(api, context, number);
+  const result = await fetchChecks(api, context, headSha(pull));
+
+  const help = [suggestCommand(context, `pr view ${number}`, "to see the pull request in full")];
+  // No statuses at all is a scalar `checks:` message, not an empty list block —
+  // there is nothing to tabulate, so the summary line stands on its own.
+  if (result.checks.length === 0) {
+    return renderScalar("checks", result.summary, help);
+  }
+  // Otherwise the summary occupies renderList's lead line, above the per-check rows.
+  return renderList({
+    noun: "checks",
+    rows: result.checks.map((check) => ({ name: check.name, conclusion: check.conclusion })),
+    countLine: `summary: ${result.summary}`,
+    help,
+  });
+}
+
 async function prCreate(deps: CliDeps, args: string[]): Promise<string> {
   if (args.includes("--help")) {
     return PR_CREATE_HELP;
@@ -631,6 +913,12 @@ export function prCommand(deps: CliDeps) {
     }
     if (subcommand === "list") {
       return prList(deps, rest);
+    }
+    if (subcommand === "view") {
+      return prView(deps, rest);
+    }
+    if (subcommand === "checks") {
+      return prChecks(deps, rest);
     }
     if (subcommand === "create") {
       return prCreate(deps, rest);

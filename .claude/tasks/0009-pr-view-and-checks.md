@@ -13,11 +13,21 @@ The `checks` field renders as the summary string (`N passed, N failed[, N skippe
 
 ## Acceptance criteria
 
-- [ ] `pr view <n>` renders the default fields including `checks`, `comment_count`, and `review_count` from the three-call fetch pattern
-- [ ] Commit-status states map to the four conclusions per the spec, `warning` counting as failure
-- [ ] A PR with no statuses renders the `"0 passed, 0 failed — this PR has no CI checks configured"` message in both commands
-- [ ] `--reviews` lists reviews with `official` and `stale` fields plus their inline comments
-- [ ] `--comments` and `--full` behave as on `issue view` (800-char comment truncation with cleanBody; `--full` suppresses everything)
-- [ ] `pr checks <n>` outputs the summary line followed by `{ name, conclusion }` rows
-- [ ] A nonexistent PR yields `PR_NOT_FOUND` (exit 1)
-- [ ] Fixture-server tests cover the status mapping including `skipped` and `warning`, the no-CI case, `--reviews`, and truncation behavior
+- [x] `pr view <n>` renders the default fields including `checks`, `comment_count`, and `review_count` from the three-call fetch pattern
+- [x] Commit-status states map to the four conclusions per the spec, `warning` counting as failure
+- [x] A PR with no statuses renders the `"0 passed, 0 failed — this PR has no CI checks configured"` message in both commands
+- [x] `--reviews` lists reviews with `official` and `stale` fields plus their inline comments
+- [x] `--comments` and `--full` behave as on `issue view` (800-char comment truncation with cleanBody; `--full` suppresses everything)
+- [x] `pr checks <n>` outputs the summary line followed by `{ name, conclusion }` rows
+- [x] A nonexistent PR yields `PR_NOT_FOUND` (exit 1)
+- [x] Fixture-server tests cover the status mapping including `skipped` and `warning`, the no-CI case, `--reviews`, and truncation behavior
+
+## Implementation Notes
+
+- The checks machinery lives in a new `src/checks.ts`: `summarizeChecks` (pure state→conclusion mapping + summary line) and `fetchChecks` (I/O shell), so `pr view` renders only the summary line while `pr checks` renders the summary plus the `{ name, conclusion }` rows from the same core. Unknown/future commit-status states fall through to `pending` rather than being reported as a pass or fail they are not.
+- `pr checks` output shape follows gh-axi: when checks exist, the summary is the lead line above a `checks` list block (rendered via `renderList`'s lead-line slot); when none exist, a scalar `checks: <message>` line. A new generic `renderScalar(noun, value, help)` in `src/render.ts` emits that literal line + help, keeping the value unquoted (as TOON reads a string scalar to end of line), matching the summary line's treatment.
+- `pr view` uses the three-call pattern from ADR 0006: the PR and its reviews are fetched in parallel, then the combined status once the head SHA is known. `review.ts` grew `fetchReviews` (raw reviews, now the shared base of `fetchReviewDecision`) and `fetchReviewComments` (per-review inline comments for `--reviews`).
+- `commentRows` was extracted from `issue.ts` into `src/comment.ts` and is now shared by `issue view --comments` and `pr view --comments`, removing the duplicate row builder.
+- `merged` renders as `no` when open, or the merge time (relative) once merged, matching gh-axi's "no / mergedAt value" behavior.
+- Review inline-comment rows (`{ author, path, body }`) are built inline in `buildReviewRows` rather than through the shared `commentRows` (`{ author, created, body }`): they are a different entity (`PullReviewComment`, with `path` and no displayed timestamp), so forcing reuse would have meant parameterizing the middle field — a shared helper here would obscure more than it saves. Flagged by the Standards review as a judgement call; kept separate deliberately.
+- The no-CI summary is labeled `summary:` when checks exist but `checks:` when none do. This matches the spec's literal empty-state form (`checks: "0 passed, 0 failed — …"`, spec line 292) and gh-axi's shape, so the label difference is intentional rather than an inconsistency.

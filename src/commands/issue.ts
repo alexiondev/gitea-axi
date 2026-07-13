@@ -1,8 +1,8 @@
 import type { Comment, CreateIssueOption, EditIssueOption, Issue } from "gitea-js";
-import { BODY_TRUNCATE_LIMIT, COMMENT_TRUNCATE_LIMIT, truncateBody } from "../body.js";
+import { BODY_TRUNCATE_LIMIT, truncateBody } from "../body.js";
 import { requireBodySource, resolveBodySource } from "../body-source.js";
 import { createClient, type GiteaClient } from "../client.js";
-import { COMMENT_FLAGS, commentItem } from "../comment.js";
+import { COMMENT_FLAGS, commentItem, commentRows } from "../comment.js";
 import { resolveRepoContext, type RepoContext } from "../context.js";
 import type { CliDeps } from "../deps.js";
 import { axiError, classifyHttpError, httpStatus } from "../errors.js";
@@ -26,7 +26,6 @@ import {
 import { resolveLabelIds, resolveMilestoneId } from "../lookup.js";
 import { fetchAllPages, readTotalCount } from "../paginate.js";
 import { formatCountLine, renderDetail, renderList, type DetailBlock } from "../render.js";
-import { relativeTime } from "../time.js";
 import { suggestCommand } from "../suggestions.js";
 
 export const ISSUE_HELP = `usage: gitea-axi issue <command> [flags]
@@ -441,20 +440,6 @@ function buildIssueDetail(issue: Issue, options: IssueDetailOptions): Record<str
   return row;
 }
 
-function buildCommentRows(
-  comments: Comment[],
-  options: { host: string; full: boolean; now: Date },
-): Record<string, unknown>[] {
-  return comments.map((comment) => {
-    const body = comment.body ?? "";
-    return {
-      author: comment.user?.login ?? "",
-      created: relativeTime(comment.created_at, options.now),
-      body: options.full ? body : truncateBody(body, COMMENT_TRUNCATE_LIMIT, options.host),
-    };
-  });
-}
-
 /** Fetch a single issue, mapping any HTTP failure to an AxiError. */
 async function getIssue(api: GiteaClient, context: RepoContext, number: number): Promise<Issue> {
   try {
@@ -518,7 +503,7 @@ async function issueView(deps: CliDeps, args: string[]): Promise<string> {
     } catch (error) {
       throw classifyHttpError(error);
     }
-    blocks.push({ noun: "comments", rows: buildCommentRows(comments, { host: context.host, full, now }) });
+    blocks.push({ noun: "comments", rows: commentRows(comments, { host: context.host, full, now }) });
   }
 
   const commentCount = issue.comments ?? 0;

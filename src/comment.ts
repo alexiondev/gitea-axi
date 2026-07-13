@@ -38,3 +38,30 @@ export function commentItem(
     body: options.full ? body : truncateBody(body, COMMENT_TRUNCATE_LIMIT, options.host),
   };
 }
+
+export interface CommentRowsOptions {
+  host: string;
+  /** Echo bodies untruncated, as `--full` asks. */
+  full: boolean;
+  now: Date;
+}
+
+/**
+ * The `{ author, created, body }` rows for a `--comments` block, shared by
+ * `issue view` and `pr view`. Each body is cleaned and truncated at 800 chars
+ * unless `full` is set. Ordered author→created→body, matching the block header
+ * both commands render.
+ */
+export function commentRows(
+  comments: Comment[],
+  options: CommentRowsOptions,
+): Record<string, unknown>[] {
+  return comments.map((comment) => {
+    const body = comment.body ?? "";
+    return {
+      author: comment.user?.login ?? "",
+      created: relativeTime(comment.created_at, options.now),
+      body: options.full ? body : truncateBody(body, COMMENT_TRUNCATE_LIMIT, options.host),
+    };
+  });
+}

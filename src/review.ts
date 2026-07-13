@@ -1,4 +1,4 @@
-import type { PullReview } from "gitea-js";
+import type { PullReview, PullReviewComment } from "gitea-js";
 import type { GiteaClient } from "./client.js";
 import type { RepoContext } from "./context.js";
 import { classifyHttpError } from "./errors.js";
@@ -48,6 +48,24 @@ export function reviewDecision(reviews: PullReview[]): ReviewDecision {
 }
 
 /**
+ * Fetch a PR's reviews. One HTTP call per PR — `pr list` issues these in
+ * parallel across the rows it renders, and `pr view` fetches them alongside the
+ * PR itself (ADR 0006).
+ */
+export async function fetchReviews(
+  api: GiteaClient,
+  context: RepoContext,
+  number: number,
+): Promise<PullReview[]> {
+  try {
+    const response = await api.repos.repoListPullReviews(context.owner, context.name, number);
+    return response.data ?? [];
+  } catch (error) {
+    throw classifyHttpError(error);
+  }
+}
+
+/**
  * Fetch a PR's reviews and reduce them to its reviewDecision. One HTTP call per
  * PR — `pr list` issues these in parallel across the rows it renders (ADR 0006).
  */
@@ -56,12 +74,28 @@ export async function fetchReviewDecision(
   context: RepoContext,
   number: number,
 ): Promise<ReviewDecision> {
-  let reviews: PullReview[];
+  return reviewDecision(await fetchReviews(api, context, number));
+}
+
+/**
+ * Fetch a single review's inline (diff) comments. `pr view --reviews` issues one
+ * of these per review, in parallel, to attach each review's comments to it.
+ */
+export async function fetchReviewComments(
+  api: GiteaClient,
+  context: RepoContext,
+  number: number,
+  reviewId: number,
+): Promise<PullReviewComment[]> {
   try {
-    const response = await api.repos.repoListPullReviews(context.owner, context.name, number);
-    reviews = response.data ?? [];
+    const response = await api.repos.repoGetPullReviewComments(
+      context.owner,
+      context.name,
+      number,
+      reviewId,
+    );
+    return response.data ?? [];
   } catch (error) {
     throw classifyHttpError(error);
   }
-  return reviewDecision(reviews);
 }
