@@ -1,6 +1,7 @@
 import type {
   Comment,
   CreatePullRequestOption,
+  CreatePullReviewOptions,
   EditPullRequestOption,
   MergePullRequestOption,
   PullRequest,
@@ -56,6 +57,7 @@ commands:
   update-branch  Merge the base branch into a pull request's head branch
   close      Close a pull request
   reopen     Reopen a closed pull request
+  review     Submit a review on a pull request
   comment    Post a comment on a pull request
 
 Run \`gitea-axi pr <command> --help\` for the flags of a command.
@@ -232,6 +234,23 @@ flags:
   --body <text>         Comment body (required unless --body-file is given)
   --body-file <path>    Read the comment body from a file (mutually exclusive with --body)
   --full                Echo the posted body in full, without truncating it at 800 chars
+  --help                Show this help
+
+global flags:
+  -R, --repo <OWNER/NAME>     Override the repository detected from the git origin remote
+  --login <name>              Select a tea login profile by name
+`;
+
+export const PR_REVIEW_HELP = `usage: gitea-axi pr review <number> [flags]
+
+Submit a review on a pull request. Exactly one action flag is required.
+
+flags:
+  --approve             Approve the pull request
+  --request-changes     Request changes on the pull request
+  --comment             Leave a review comment without approving or rejecting
+  --body <text>         Review body
+  --body-file <path>    Read the review body from a file (mutually exclusive with --body)
   --help                Show this help
 
 global flags:
@@ -1036,6 +1055,87 @@ async function prComment(deps: CliDeps, args: string[]): Promise<string> {
   });
 }
 
+// A review action: the event Gitea's review endpoint expects (`event`) paired
+// with the value gitea-axi reports back (`action`).
+interface ReviewAction {
+  event: string;
+  action: string;
+}
+
+// The three action switches, each mapped to its {@link ReviewAction}.
+const REVIEW_ACTIONS: Record<string, ReviewAction> = {
+  "--approve": { event: "APPROVED", action: "approve" },
+  "--request-changes": { event: "REQUEST_CHANGES", action: "request-changes" },
+  "--comment": { event: "COMMENT", action: "comment" },
+};
+
+const PR_REVIEW_HELP_SUGGESTION = [
+  "Run `gitea-axi pr review --help` to see available flags",
+];
+
+/**
+ * The single review action to submit. Exactly one of the three action switches
+ * is required: zero or more than one is a `VALIDATION_ERROR` raised before any
+ * request goes out, mirroring `pr merge`'s conflicting-method rule. Body
+ * requirements are Gitea's to enforce, so they are not pre-checked here — a
+ * body-less event the server rejects surfaces as its own 422.
+ */
+function resolveReviewAction(flags: Record<string, string | true>): ReviewAction {
+  const selected = Object.entries(REVIEW_ACTIONS)
+    .filter(([flag]) => flags[flag] === true)
+    .map(([, value]) => value);
+  if (selected.length !== 1) {
+    throw axiError(
+      "Choose exactly one review action (--approve, --request-changes, or --comment)",
+      "VALIDATION_ERROR",
+      PR_REVIEW_HELP_SUGGESTION,
+    );
+  }
+  return selected[0]!;
+}
+
+async function prReview(deps: CliDeps, args: string[]): Promise<string> {
+  if (args.includes("--help")) {
+    return PR_REVIEW_HELP;
+  }
+  const { flags, positionals } = parseFlags(
+    args,
+    {
+      "--approve": { takesValue: false },
+      "--request-changes": { takesValue: false },
+      "--comment": { takesValue: false },
+      "--body": { takesValue: true },
+      "--body-file": { takesValue: true },
+    },
+    "pr review",
+  );
+  const number = parsePositionalNumber(positionals, "pr review", "pull request");
+
+  // Everything the caller's own input can settle is checked before any request
+  // goes out: the action flag count first, then the body source.
+  const chosen = resolveReviewAction(flags);
+  const body = resolveBodySource(deps, flags, "pr review");
+
+  const context = await resolveRepoContext(deps);
+  const api = createClient(context);
+
+  const payload: CreatePullReviewOptions = { event: chosen.event };
+  if (body !== undefined) {
+    payload.body = body;
+  }
+  try {
+    await api.repos.repoCreatePullReview(context.owner, context.name, number, payload);
+  } catch (error) {
+    throw classifyHttpError(error);
+  }
+
+  return renderDetail({
+    noun: "review",
+    item: { number, action: chosen.action },
+    help: [suggestCommand(context, `pr view ${number} --reviews`, "to see the review in full")],
+  });
+}
+
 /**
  * The assignee list to PATCH: the pull request's current assignees with the
  * requested additions applied and removals dropped (fetch-then-patch, ADR 0007).
@@ -1490,6 +1590,9 @@ export function prCommand(deps: CliDeps) {
     }
     if (subcommand === "reopen") {
       return prReopen(deps, rest);
+    }
+    if (subcommand === "review") {
+      return prReview(deps, rest);
     }
     if (subcommand === "comment") {
       return prComment(deps, rest);
