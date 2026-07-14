@@ -2,6 +2,7 @@ import type {
   Comment,
   CreatePullRequestOption,
   EditPullRequestOption,
+  MergePullRequestOption,
   PullRequest,
   PullReview,
   PullReviewComment,
@@ -51,6 +52,8 @@ commands:
   checks     Show a pull request's CI check results
   create     Create a pull request
   edit       Edit a pull request's title, body, labels, assignees, reviewers, milestone, or base
+  merge      Merge a pull request
+  update-branch  Merge the base branch into a pull request's head branch
   close      Close a pull request
   reopen     Reopen a closed pull request
   comment    Post a comment on a pull request
@@ -102,6 +105,45 @@ already-open pull request is a no-op.
 
 flags:
   --help                Show this help
+
+global flags:
+  -R, --repo <OWNER/NAME>     Override the repository detected from the git origin remote
+  --login <name>              Select a tea login profile by name
+`;
+
+export const PR_MERGE_HELP = `usage: gitea-axi pr merge <number> [flags]
+
+Merge a pull request in the current repository. An already-merged pull request
+is reported as-is without re-merging.
+
+flags:
+  --method <method>        Merge method: merge, squash, rebase, rebase-merge,
+                           fast-forward-only, or manually-merged (default: merge)
+  --merge                  Shorthand for --method merge
+  --squash                 Shorthand for --method squash
+  --rebase                 Shorthand for --method rebase
+  --auto                   Merge automatically once required checks succeed
+  --delete-branch          Delete the head branch after a successful merge
+  --merge-commit-id <sha>  The existing merge commit; required with, and only
+                           valid for, --method manually-merged
+  --subject <text>         Override the merge commit subject line
+  --body <text>            Override the merge commit message body
+  --body-file <path>       Read the merge commit message body from a file
+  --help                   Show this help
+
+global flags:
+  -R, --repo <OWNER/NAME>     Override the repository detected from the git origin remote
+  --login <name>              Select a tea login profile by name
+`;
+
+export const PR_UPDATE_BRANCH_HELP = `usage: gitea-axi pr update-branch <number> [flags]
+
+Merge the base branch into a pull request's head branch, bringing the head up
+to date with the base.
+
+flags:
+  --style <merge|rebase>   How to update the head branch (default: merge)
+  --help                   Show this help
 
 global flags:
   -R, --repo <OWNER/NAME>     Override the repository detected from the git origin remote
@@ -204,6 +246,39 @@ const PR_CREATE_HELP_SUGGESTION = [
 const PR_LIST_HELP_SUGGESTION = [
   "Run `gitea-axi pr list --help` to see available flags",
 ];
+
+const PR_MERGE_HELP_SUGGESTION = [
+  "Run `gitea-axi pr merge --help` to see available flags",
+];
+
+const PR_UPDATE_BRANCH_HELP_SUGGESTION = [
+  "Run `gitea-axi pr update-branch --help` to see available flags",
+];
+
+// The six methods Gitea's merge endpoint accepts as its `Do` field, in the
+// order the help text lists them.
+const MERGE_METHODS = [
+  "merge",
+  "squash",
+  "rebase",
+  "rebase-merge",
+  "fast-forward-only",
+  "manually-merged",
+] as const;
+type MergeMethod = (typeof MERGE_METHODS)[number];
+
+// The bare-switch shorthands for the three common methods. `manually-merged` and
+// the two rebase variants have no shorthand — they are reachable only via
+// `--method`, which is why `--merge-commit-id` (a manually-merged-only flag)
+// can never collide with a shorthand.
+const MERGE_SHORTHANDS: Record<string, MergeMethod> = {
+  "--merge": "merge",
+  "--squash": "squash",
+  "--rebase": "rebase",
+};
+
+const UPDATE_STYLES = ["merge", "rebase"] as const;
+type UpdateStyle = (typeof UPDATE_STYLES)[number];
 
 // The `review` column is not one of these: it comes from a separate reviews
 // fetch per PR (ADR 0006), so it is set on each row after the decision resolves,
@@ -1213,6 +1288,176 @@ async function prReopen(deps: CliDeps, args: string[]): Promise<string> {
   });
 }
 
+/**
+ * The merge method to send and the value to report. A single explicit selector
+ * — `--method` or one of the {@link MERGE_SHORTHANDS} — is resolved to its
+ * method; giving more than one, in any combination, is a `VALIDATION_ERROR`
+ * ("conflicting or duplicate action flags"). With no selector the method is
+ * `undefined`: the caller sends Gitea's baseline `merge` but reports `default`,
+ * signalling that no method was chosen.
+ */
+function resolveMergeMethod(flags: Record<string, string | true>): MergeMethod | undefined {
+  const selected: MergeMethod[] = [];
+  for (const [flag, method] of Object.entries(MERGE_SHORTHANDS)) {
+    if (flags[flag] === true) {
+      selected.push(method);
+    }
+  }
+  const hasMethodFlag = flags["--method"] !== undefined;
+  if (selected.length + (hasMethodFlag ? 1 : 0) > 1) {
+    throw axiError(
+      "Choose only one merge method (--method, --merge, --squash, or --rebase)",
+      "VALIDATION_ERROR",
+      PR_MERGE_HELP_SUGGESTION,
+    );
+  }
+  if (hasMethodFlag) {
+    // parseEnumFlag never returns undefined here — the flag is present — but its
+    // signature allows it, so the non-null assertion documents that.
+    return parseEnumFlag(flags["--method"], "--method", MERGE_METHODS, PR_MERGE_HELP_SUGGESTION)!;
+  }
+  return selected[0];
+}
+
+async function prMerge(deps: CliDeps, args: string[]): Promise<string> {
+  if (args.includes("--help")) {
+    return PR_MERGE_HELP;
+  }
+  const { flags, positionals } = parseFlags(
+    args,
+    {
+      "--method": { takesValue: true },
+      "--merge": { takesValue: false },
+      "--squash": { takesValue: false },
+      "--rebase": { takesValue: false },
+      "--auto": { takesValue: false },
+      "--delete-branch": { takesValue: false },
+      "--merge-commit-id": { takesValue: true },
+      "--subject": { takesValue: true },
+      "--body": { takesValue: true },
+      "--body-file": { takesValue: true },
+    },
+    "pr merge",
+  );
+  const number = parsePositionalNumber(positionals, "pr merge", "pull request");
+
+  // Everything the caller's own input can settle is checked before any request
+  // goes out, so a rejected invocation never merges. The method resolves first,
+  // then the manually-merged/`--merge-commit-id` pairing, then the body source.
+  const method = resolveMergeMethod(flags);
+  const effectiveMethod: MergeMethod = method ?? "merge";
+  const mergeCommitId = flagValue(flags, "--merge-commit-id");
+  if (effectiveMethod === "manually-merged" && mergeCommitId === undefined) {
+    throw axiError(
+      "--method manually-merged requires --merge-commit-id <sha>",
+      "VALIDATION_ERROR",
+      PR_MERGE_HELP_SUGGESTION,
+    );
+  }
+  if (effectiveMethod !== "manually-merged" && mergeCommitId !== undefined) {
+    throw axiError(
+      "--merge-commit-id is only valid with --method manually-merged",
+      "VALIDATION_ERROR",
+      PR_MERGE_HELP_SUGGESTION,
+    );
+  }
+  const body = resolveBodySource(deps, flags, "pr merge");
+  const subject = flagValue(flags, "--subject");
+
+  const context = await resolveRepoContext(deps);
+  const api = createClient(context);
+
+  // Read the current state first: an already-merged pull request short-circuits
+  // to the idempotent entity block below rather than issuing a merge that Gitea
+  // would reject as redundant.
+  const pull = await getPull(api, context, number);
+  if (pull.merged) {
+    return renderDetail({
+      noun: "pull_request",
+      item: {
+        number,
+        state: "merged",
+        merged_by: pull.merged_by?.login ?? null,
+        merged_at: relativeTime(pull.merged_at, new Date()),
+      },
+      help: [suggestCommand(context, `pr view ${number}`, "to see the merged pull request")],
+    });
+  }
+
+  const payload: MergePullRequestOption = { Do: effectiveMethod };
+  if (mergeCommitId !== undefined) {
+    payload.MergeCommitID = mergeCommitId;
+  }
+  if (subject !== undefined) {
+    payload.MergeTitleField = subject;
+  }
+  if (body !== undefined) {
+    payload.MergeMessageField = body;
+  }
+  if (flags["--auto"] === true) {
+    payload.merge_when_checks_succeed = true;
+  }
+  if (flags["--delete-branch"] === true) {
+    payload.delete_branch_after_merge = true;
+  }
+
+  try {
+    await api.repos.repoMergePullRequest(context.owner, context.name, number, payload);
+  } catch (error) {
+    // A merge-blocked pull request (stale head, failing checks, conflicts) comes
+    // back 405/409, which classifyHttpError already maps to VALIDATION_ERROR. Its
+    // classified message (the server's own detail) is kept, and remediation lines
+    // are added pointing at the two commands that unblock it: update-branch for a
+    // stale head, checkout to resolve conflicts locally.
+    const classified = classifyHttpError(error);
+    const status = httpStatus(error);
+    if (status === 405 || status === 409) {
+      throw axiError(classified.message, "VALIDATION_ERROR", [
+        suggestCommand(context, `pr update-branch ${number}`, "to merge the base branch into a stale head"),
+        suggestCommand(context, `pr checkout ${number}`, "to check the branch out and resolve conflicts locally"),
+      ]);
+    }
+    throw classified;
+  }
+
+  // The mutation ran, so the block is named for the action. `method` reports the
+  // caller's choice: the resolved method, or `default` when none was given.
+  return renderDetail({
+    noun: "merged",
+    item: { number, status: "ok", method: method ?? "default" },
+    help: [suggestCommand(context, `pr view ${number}`, "to see the merged pull request")],
+  });
+}
+
+async function prUpdateBranch(deps: CliDeps, args: string[]): Promise<string> {
+  if (args.includes("--help")) {
+    return PR_UPDATE_BRANCH_HELP;
+  }
+  const { flags, positionals } = parseFlags(
+    args,
+    { "--style": { takesValue: true } },
+    "pr update-branch",
+  );
+  const number = parsePositionalNumber(positionals, "pr update-branch", "pull request");
+  const style: UpdateStyle =
+    parseEnumFlag(flags["--style"], "--style", UPDATE_STYLES, PR_UPDATE_BRANCH_HELP_SUGGESTION) ??
+    "merge";
+
+  const context = await resolveRepoContext(deps);
+  const api = createClient(context);
+  try {
+    await api.repos.repoUpdatePullRequest(context.owner, context.name, number, { style });
+  } catch (error) {
+    throw classifyHttpError(error);
+  }
+
+  return renderDetail({
+    noun: "updated",
+    item: { number, status: "ok" },
+    help: [suggestCommand(context, `pr checks ${number}`, "to monitor CI after the update")],
+  });
+}
+
 export function prCommand(deps: CliDeps) {
   return async (args: string[]): Promise<string> => {
     const [subcommand, ...rest] = args;
@@ -1233,6 +1478,12 @@ export function prCommand(deps: CliDeps) {
     }
     if (subcommand === "edit") {
       return prEdit(deps, rest);
+    }
+    if (subcommand === "merge") {
+      return prMerge(deps, rest);
+    }
+    if (subcommand === "update-branch") {
+      return prUpdateBranch(deps, rest);
     }
     if (subcommand === "close") {
       return prClose(deps, rest);
