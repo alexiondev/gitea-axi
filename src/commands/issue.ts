@@ -14,6 +14,7 @@ import {
   pluck,
   relativeTimeField,
   selectExtraFields,
+  truncatedBody,
   type FieldDef,
 } from "../fields.js";
 import {
@@ -190,6 +191,7 @@ flags:
   --label <name>        Apply a label by name (repeatable, case-insensitive)
   --milestone <name>    Assign a milestone by name (case-insensitive)
   --fields <a,b,c>      Append extra fields: labels, assignees, milestone, body
+  --full                Show the body field raw, without 500-char truncation
   --help                Show this help
 
 global flags:
@@ -240,6 +242,7 @@ flags:
   --sort <created|updated|comments>  Sort descending (client-side)
   --limit <n>                     Maximum number of issues to return (default: 30)
   --fields <a,b,c>                Append extra fields: body, closedAt, labels, milestone, updatedAt, url
+  --full                          Show the body field raw, without 500-char truncation
   --help                          Show this help
 
 global flags:
@@ -257,7 +260,7 @@ const ISSUE_LIST_FIELDS: FieldDef<Issue>[] = [
 
 // Appended to the defaults on request via `--fields`, never replacing them.
 const ISSUE_LIST_EXTRA_FIELDS: Record<string, FieldDef<Issue>> = {
-  body: pluck("body"),
+  body: truncatedBody("body"),
   closedAt: relativeTimeField("closedAt", "closed_at"),
   labels: joined("labels", "labels", "name"),
   milestone: pluck("milestone", "milestone.title"),
@@ -394,6 +397,7 @@ async function issueList(deps: CliDeps, args: string[]): Promise<string> {
       "--sort": { takesValue: true },
       "--limit": { takesValue: true },
       "--fields": { takesValue: true },
+      "--full": { takesValue: false },
     },
     "issue list",
   );
@@ -407,6 +411,7 @@ async function issueList(deps: CliDeps, args: string[]): Promise<string> {
   const state = parseState(flags["--state"]);
   const sort = parseSort(flags["--sort"]);
   const limit = parseLimit(flags["--limit"]);
+  const full = flags["--full"] === true;
   const extraFields = selectExtraFields(
     flagValue(flags, "--fields"),
     ISSUE_LIST_EXTRA_FIELDS,
@@ -450,7 +455,7 @@ async function issueList(deps: CliDeps, args: string[]): Promise<string> {
 
   const now = new Date();
   const rows = issues.map((issue) =>
-    extractRow(issue, [...ISSUE_LIST_FIELDS, ...extraFields], { now }),
+    extractRow(issue, [...ISSUE_LIST_FIELDS, ...extraFields], { now, host: context.host, full }),
   );
   return renderList({
     noun: "issues",
@@ -478,7 +483,11 @@ interface IssueDetailOptions {
 }
 
 function buildIssueDetail(issue: Issue, options: IssueDetailOptions): Record<string, unknown> {
-  const row = extractRow(issue, ISSUE_VIEW_FIELDS, { now: options.now });
+  const row = extractRow(issue, ISSUE_VIEW_FIELDS, {
+    now: options.now,
+    host: options.host,
+    full: options.full,
+  });
   const body = issue.body ?? "";
   row.body = options.full ? body : truncateBody(body, BODY_TRUNCATE_LIMIT, options.host);
   if (!options.withComments) {
@@ -584,7 +593,7 @@ const ISSUE_CREATE_EXTRA_FIELDS: Record<string, FieldDef<Issue>> = {
   labels: joined("labels", "labels", "name"),
   assignees: joined("assignees", "assignees", "login"),
   milestone: pluck("milestone", "milestone.title"),
-  body: pluck("body"),
+  body: truncatedBody("body"),
 };
 
 async function issueCreate(deps: CliDeps, args: string[]): Promise<string> {
@@ -601,6 +610,7 @@ async function issueCreate(deps: CliDeps, args: string[]): Promise<string> {
       "--label": { takesValue: true, repeatable: true },
       "--milestone": { takesValue: true },
       "--fields": { takesValue: true },
+      "--full": { takesValue: false },
     },
     "issue create",
   );
@@ -621,6 +631,7 @@ async function issueCreate(deps: CliDeps, args: string[]): Promise<string> {
     ]);
   }
   const body = resolveBodySource(deps, flags, "issue create");
+  const full = flags["--full"] === true;
   const extraFields = selectExtraFields(
     flagValue(flags, "--fields"),
     ISSUE_CREATE_EXTRA_FIELDS,
@@ -656,7 +667,11 @@ async function issueCreate(deps: CliDeps, args: string[]): Promise<string> {
     throw classifyHttpError(error);
   }
 
-  const item = extractRow(issue, [...ISSUE_CREATE_FIELDS, ...extraFields], { now: new Date() });
+  const item = extractRow(issue, [...ISSUE_CREATE_FIELDS, ...extraFields], {
+    now: new Date(),
+    host: context.host,
+    full,
+  });
   return renderDetail({
     noun: "issue",
     item,
@@ -1170,7 +1185,9 @@ async function listRelationships(
   const issues = await fetchRelationships(api, context, group, number);
 
   const now = new Date();
-  const rows = issues.map((issue) => extractRow(issue, RELATIONSHIP_FIELDS, { now }));
+  const rows = issues.map((issue) =>
+    extractRow(issue, RELATIONSHIP_FIELDS, { now, host: context.host, full: false }),
+  );
   return renderList({
     noun: group.listNoun,
     rows,

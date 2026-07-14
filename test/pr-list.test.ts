@@ -463,6 +463,48 @@ describe("pr list --fields", () => {
     expect(row).toMatch(/\d+(mo|[smhdy]) ago/);
   });
 
+  it("applies the body-truncation ruling to a PR body, and --full suppresses it", async () => {
+    // Truncated inline at 500 chars with the hint.
+    server = await startFixtureServer([
+      {
+        method: "GET",
+        path: PULLS_PATH,
+        headers: { "X-Total-Count": "1" },
+        body: [pullOf(7, { body: "x".repeat(650) })],
+      },
+      reviewsRoute(7, []),
+    ]);
+    const truncated = await runCliTest(["pr", "list", "--fields", "body"], {
+      env: testModeEnv(server.url),
+    });
+
+    expect(truncated.exitCode).toBe(0);
+    expect(truncated.stdout).toContain("x".repeat(500));
+    expect(truncated.stdout).toContain(
+      "... (truncated, 650 chars total - use --full to see complete body)",
+    );
+    expect(truncated.stdout).not.toContain("x".repeat(650));
+
+    // --full returns the body raw, with no truncation hint.
+    await server.close();
+    server = await startFixtureServer([
+      {
+        method: "GET",
+        path: PULLS_PATH,
+        headers: { "X-Total-Count": "1" },
+        body: [pullOf(7, { body: "x".repeat(650) })],
+      },
+      reviewsRoute(7, []),
+    ]);
+    const full = await runCliTest(["pr", "list", "--fields", "body", "--full"], {
+      env: testModeEnv(server.url),
+    });
+
+    expect(full.exitCode).toBe(0);
+    expect(full.stdout).toContain("x".repeat(650));
+    expect(full.stdout).not.toContain("truncated");
+  });
+
   it("rejects an unknown --fields name with exit code 2", async () => {
     server = await startFixtureServer([]);
     const { stdout, exitCode } = await runCliTest(["pr", "list", "--fields", "bogus"], {

@@ -26,6 +26,7 @@ import {
   pluck,
   relativeTimeField,
   selectExtraFields,
+  truncatedBody,
   type FieldDef,
 } from "../fields.js";
 import {
@@ -228,6 +229,7 @@ flags:
                                   Sort order (passed to the API)
   --limit <n>                     Maximum number of pull requests to return (default: 30)
   --fields <a,b,c>                Append extra fields: body, createdAt, labels, milestone, mergedAt, url
+  --full                          Show the body field raw, without 500-char truncation
   --help                          Show this help
 
 global flags:
@@ -343,7 +345,7 @@ const PR_LIST_FIELDS: FieldDef<PullRequest>[] = [
 
 // Appended to the defaults on request via `--fields`, never replacing them.
 const PR_LIST_EXTRA_FIELDS: Record<string, FieldDef<PullRequest>> = {
-  body: pluck("body"),
+  body: truncatedBody("body"),
   createdAt: relativeTimeField("created", "created_at"),
   labels: joined("labels", "labels", "name"),
   milestone: pluck("milestone", "milestone.title"),
@@ -537,6 +539,7 @@ async function prList(deps: CliDeps, args: string[]): Promise<string> {
       "--sort": { takesValue: true },
       "--limit": { takesValue: true },
       "--fields": { takesValue: true },
+      "--full": { takesValue: false },
     },
     "pr list",
   );
@@ -550,6 +553,7 @@ async function prList(deps: CliDeps, args: string[]): Promise<string> {
   const state = parsePrState(flags["--state"]);
   const sort = parsePrSort(flags["--sort"]);
   const limit = parsePrLimit(flags["--limit"]);
+  const full = flags["--full"] === true;
   const extraFields = selectExtraFields(
     flagValue(flags, "--fields"),
     PR_LIST_EXTRA_FIELDS,
@@ -609,10 +613,11 @@ async function prList(deps: CliDeps, args: string[]): Promise<string> {
   );
 
   const now = new Date();
+  const extractContext = { now, host: context.host, full };
   const rows = pulls.map((pull, index) => {
-    const row = extractRow(pull, PR_LIST_FIELDS, { now });
+    const row = extractRow(pull, PR_LIST_FIELDS, extractContext);
     row.review = decisions[index];
-    Object.assign(row, extractRow(pull, extraFields, { now }));
+    Object.assign(row, extractRow(pull, extraFields, extractContext));
     return row;
   });
 
@@ -745,7 +750,11 @@ interface PrDetailOptions {
 }
 
 function buildPrDetail(pull: PullRequest, options: PrDetailOptions): Record<string, unknown> {
-  const row = extractRow(pull, PR_VIEW_FIELDS, { now: options.now });
+  const row = extractRow(pull, PR_VIEW_FIELDS, {
+    now: options.now,
+    host: options.host,
+    full: options.full,
+  });
   // gh-axi renders `merged` as `no` when open, or the merge time once merged.
   row.merged = pull.merged ? relativeTime(pull.merged_at, options.now) : "no";
   row.checks = options.checksSummary;

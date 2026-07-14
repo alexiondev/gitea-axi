@@ -23,7 +23,26 @@ The ruling is verified at the fixture/unit tier only: body truncation is determi
 
 ## Acceptance criteria
 
-- [ ] The spec no longer contradicts itself: Principle 3 and the Command Surface's `body` field agree, with the reasoning recorded
-- [ ] `issue list --fields body` and `issue create --fields body` behave identically under the ruling
-- [ ] If truncation wins, the truncation hint and `--full` affordance match how `issue view` already presents a truncated body (see ADR 0003)
-- [ ] Tests cover the ruled behaviour on both commands
+- [x] The spec no longer contradicts itself: Principle 3 and the Command Surface's `body` field agree, with the reasoning recorded
+- [x] `issue list --fields body` and `issue create --fields body` behave identically under the ruling
+- [x] If truncation wins, the truncation hint and `--full` affordance match how `issue view` already presents a truncated body (see ADR 0003)
+- [x] Tests cover the ruled behaviour on both commands
+
+## Implementation Notes
+
+**The ruling: `--fields body` truncates.**
+Principle 3 already declared truncation applies "in all contexts (list and detail alike)"; the four `--fields body` extractors were the drift, not the intent.
+"Raw" in the Command Surface is resolved to mean *uncleaned markdown* (short bodies still pass through byte-for-byte), never *unbounded* — an unbounded body on a list path lets `issue list --limit 30 --fields body` spill thirty full bodies into an agent's context, the exact cost Principle 3 exists to prevent.
+
+**Code.**
+Added a `truncatedBody()` `FieldDef` in `fields.ts` (alongside `pluck`/`joined`/`relativeTimeField`) that routes the value through the same `truncateBody(value, BODY_TRUNCATE_LIMIT, host)` that `issue view` / `pr view` use, so the hint text and `cleanBody`-on-overflow behaviour are byte-identical.
+`ExtractContext` gained `host` and `full` (both required) — the render context now declares its hostname and truncation mode explicitly; every `extractRow` call site was updated (the body-less ones — dashboard, label list, relationships — pass `full: false`).
+The four registries (`ISSUE_LIST`, `ISSUE_CREATE`, `PR_LIST`, `SEARCH` extra fields) now use `truncatedBody("body")`.
+
+**Scope beyond the two commands the ACs name.**
+The task body mandated that "`issue list`, `issue create`, and any later command exposing `body` via `--fields` must behave the same", so `pr list` and `search` were included too — each got the ruling and a parity test.
+A `--full` flag (suppresses the `--fields body` truncation, matching `issue view`) was added to `issue list`, `issue create`, `pr list`, and `search`, since the inline hint literally says "use --full to see complete body" and that promise must be keepable on every command that offers the field.
+Help text for all four commands and ADR 0003's consequences were updated accordingly.
+
+**Verification tier.**
+Fixture/unit tier only, as the task specified — no e2e case: truncation is deterministic string processing over a body the CLI already holds, with no live-Gitea response semantics to attest to.

@@ -98,7 +98,7 @@ This holds even when invoked by the SessionStart hook; error noise in non-Gitea 
 Always passes `type=issues` — Gitea's issue endpoints also serve PRs, which must never appear in issue lists (see Issue/PR Type Guard).
 Client-side `--sort` reorders without changing membership, so the standard `count: N of T total` line is kept (see ADR 0005); full pagination still precedes sorting.
 Default output fields (matching gh-axi): `number`, `title`, `state` (lowercased), `author` (plucked from `user.login`), `created` (relative time).
-Extra fields via `--fields`: `body` (raw), `closedAt` (relative time, as `closed_at`), `labels` (joined names), `milestone` (title), `updatedAt` (relative time, as `updated_at`), `url`.
+Extra fields via `--fields`: `body` (truncated at 500, exactly as `issue view` presents it; `--full` shows it raw), `closedAt` (relative time, as `closed_at`), `labels` (joined names), `milestone` (title), `updatedAt` (relative time, as `updated_at`), `url`.
 No `type` field in output — Gitea has no issue types.
 
 **`issue view <n> [flags]`**
@@ -118,7 +118,7 @@ No sub-issue augmentation (Gitea does not model issue hierarchies; use `issue bl
 `--project` is excluded (Gitea has no projects REST API).
 `--type` is excluded (Gitea has no issue types).
 Output schema: `issue: { number, title, state, url }` (where `url` = `html_url`).
-Extra fields available via `--fields`: `labels`, `assignees`, `milestone`, `body`.
+Extra fields available via `--fields`: `labels`, `assignees`, `milestone`, `body` (truncated at 500, exactly as `issue view` presents it; `--full` shows it raw).
 
 **`issue edit <n> [flags]`**
 `--title`;
@@ -209,7 +209,7 @@ No gh-axi equivalent.
 `--fields <a,b,c>`.
 `--search` is explicitly forbidden (VALIDATION_ERROR; help: `` Use `gitea-axi search prs "<query>"` for full-text search ``).
 Default output fields (matching gh-axi): `number`, `title`, `state` (lowercased), `author` (plucked from `user.login`), `draft` (bool→yes/no), `review` (`reviewDecision` mapped: APPROVED→approved, CHANGES_REQUESTED→changes_requested, REVIEW_REQUIRED→required).
-Extra fields via `--fields`: `body` (raw), `createdAt` (relative time, as `created`), `labels` (joined names), `milestone` (title), `mergedAt` (relative time, as `merged_at`), `url`.
+Extra fields via `--fields`: `body` (truncated at 500, exactly as `pr view` presents it; `--full` shows it raw), `createdAt` (relative time, as `created`), `labels` (joined names), `milestone` (title), `mergedAt` (relative time, as `merged_at`), `url`.
 `reviewDecision` is computed client-side by fetching reviews for each PR in parallel (one extra HTTP call per PR; see ADR 0006).
 When any client-side filter is active, the count line shows `count: N of T total` with `T` computed from the in-memory filtered result set (see ADR 0005).
 
@@ -361,7 +361,7 @@ Full-text search within the current repository, added because `--search` on the 
 The positional `<query>` is required (`VALIDATION_ERROR` if missing).
 Endpoint: `GET /repos/issues/search` with `q=<query>`, `type=issues` or `type=pulls`, and `owner=<owner>`.
 The endpoint has no repo-name filter, so results are additionally filtered client-side to the current repository via each result's `repository` field — the standard client-side filtering policy applies, including its `count: N of T total` rule with `T` from the filtered set.
-Flags: `--state <open|closed|all>` (default open); `--label <name>` (API-supported — comma-separated names); `--limit <n>` (default 30); `--fields <a,b,c>`.
+Flags: `--state <open|closed|all>` (default open); `--label <name>` (API-supported — comma-separated names); `--limit <n>` (default 30); `--fields <a,b,c>` (the same extras as `issue list` / `pr list`, so `body` is truncated at 500); `--full` (shows any `--fields body` raw, matching the list commands).
 Default output fields (both commands): `number`, `title`, `state`, `author`, `created` — a locator schema; search results are Issue-shaped for both types, and `draft`/`review` parity with `pr list` would require two extra fetches per result for a command whose job is finding the number to feed into `issue view` / `pr view`.
 Output blocks: `issues:` / `pull_requests:`, matching the list commands.
 Empty state: standard `<noun>[0]: (none)`.
@@ -464,11 +464,15 @@ Field extraction uses a `FieldDef` type system with typed extractors: nested plu
 
 **Principle 3 — Content truncation.**
 Body text is truncated at **500 characters** in all contexts (list and detail alike), matching gh-axi.
+"All contexts" is exhaustive: it includes the `body` field offered via `--fields` on `issue list`, `issue create`, `pr list`, and `search`, which truncate identically to `issue view` / `pr view` rather than emitting the body raw (task 0021).
+The Command Surface once described that field as "`body` (raw)".
+"Raw" is resolved here to mean *uncleaned markdown* (short bodies still pass through byte-for-byte, un-`cleanBody`-ed), never *unbounded* — an unbounded body on a list path would let `issue list --limit 30 --fields body` spill thirty full bodies into an agent's context, the exact cost this principle exists to prevent.
 Comment bodies truncate at 800 characters wherever they appear (comment-post output and `--comments` view blocks), with cleanBody applied.
 Diff content is truncated at 4000 characters.
 When body truncation occurs, a hint is appended inline: `"... (truncated, N chars total - use --full to see complete body)"`.
 When diff truncation occurs, `truncated: true` and `original_length: N` are added as separate fields, and a next-step suggestion to use `--full` is prepended.
 `--full` on `issue view` and `pr view` suppresses all truncation in the command's output (entity body and comment bodies alike); `--full` on `pr diff` suppresses diff truncation.
+`--full` on `issue list`, `issue create`, `pr list`, and `search` likewise suppresses the `--fields body` truncation, so the hint's "use --full to see complete body" holds on every command that offers the field.
 Before truncation, a `cleanBody` step is applied **only when the raw body exceeds the truncation limit**.
 `cleanBody` normalizes Gitea issue/PR URLs using the detected hostname (`https://<host>/<owner>/<repo>/issues/N` → `Issue#N`; `.../pulls/N` → `PR#N`), strips markdown image embeds, removes long URLs in markdown links and standalone text, and collapses email-style quoted blocks — matching gh-axi's transforms plus Gitea-specific URL normalization.
 If cleaning brings the body within the limit, the cleaned body is returned with an appended note; if it still exceeds the limit, the cleaned body is truncated.

@@ -124,7 +124,9 @@ async function labelList(deps: CliDeps, args: string[]): Promise<string> {
   }
 
   const now = new Date();
-  const rows = labels.map((label) => extractRow(label, LABEL_LIST_FIELDS, { now }));
+  const rows = labels.map((label) =>
+    extractRow(label, LABEL_LIST_FIELDS, { now, host: context.host, full: false }),
+  );
   return renderList({
     noun: "labels",
     rows,

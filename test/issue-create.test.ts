@@ -309,6 +309,48 @@ describe("issue create", () => {
     expect(stdout).toContain("number: 7");
   });
 
+  it("applies the body-truncation ruling to a created issue, and --full suppresses it", async () => {
+    // Truncated inline at 500 chars with the hint.
+    server = await startFixtureServer([
+      {
+        method: "POST",
+        path: ISSUES_PATH,
+        status: 201,
+        body: createdIssue({ body: "x".repeat(650) }),
+      },
+    ]);
+    const truncated = await runCliTest(
+      ["issue", "create", "--title", "T", "--fields", "body"],
+      { env: testModeEnv(server.url) },
+    );
+
+    expect(truncated.exitCode).toBe(0);
+    expect(truncated.stdout).toContain("x".repeat(500));
+    expect(truncated.stdout).toContain(
+      "... (truncated, 650 chars total - use --full to see complete body)",
+    );
+    expect(truncated.stdout).not.toContain("x".repeat(650));
+
+    // --full returns the body raw, with no truncation hint.
+    await server.close();
+    server = await startFixtureServer([
+      {
+        method: "POST",
+        path: ISSUES_PATH,
+        status: 201,
+        body: createdIssue({ body: "x".repeat(650) }),
+      },
+    ]);
+    const full = await runCliTest(
+      ["issue", "create", "--title", "T", "--fields", "body", "--full"],
+      { env: testModeEnv(server.url) },
+    );
+
+    expect(full.exitCode).toBe(0);
+    expect(full.stdout).toContain("x".repeat(650));
+    expect(full.stdout).not.toContain("truncated");
+  });
+
   it("rejects an unknown --fields name with VALIDATION_ERROR", async () => {
     server = await startFixtureServer([]);
     const { stdout, exitCode } = await runCliTest(

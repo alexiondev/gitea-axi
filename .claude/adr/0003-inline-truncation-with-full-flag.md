@@ -15,5 +15,7 @@ Simpler, portable, consistent with the stated reference.
 ## Consequences
 
 `issue view` and `pr view` both accept `--full` to return untruncated body.
+`issue list`, `issue create`, `pr list`, and `search` also accept `--full`, since they offer `body` via `--fields` and that field truncates identically (task 0021).
+The flag keeps the inline hint's "use --full" promise honest on those commands too.
 `pr diff` truncates at 4000 chars (matching gh-axi's `DIFF_TRUNCATE_LIMIT`); when truncated, a next-step suggestion to rerun with `--full` is prepended.
 The `full_content` field name and temp-file design from the spec draft are dropped entirely.

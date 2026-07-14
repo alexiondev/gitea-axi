@@ -10,6 +10,7 @@ import {
   pluck,
   relativeTimeField,
   selectExtraFields,
+  truncatedBody,
   type FieldDef,
 } from "../fields.js";
 import { flagValue, parseEnumFlag, parseFlags, parsePositiveInt } from "../flags.js";
@@ -41,6 +42,7 @@ flags:
   --label <a,b>                   Filter by label name (comma-separated)
   --limit <n>                     Maximum number of matches to return (default: 30)
   --fields <a,b,c>                Append extra fields: body, closedAt, labels, milestone, updatedAt, url
+  --full                          Show the body field raw, without 500-char truncation
   --help                          Show this help
 
 global flags:
@@ -60,6 +62,7 @@ flags:
   --label <a,b>                   Filter by label name (comma-separated)
   --limit <n>                     Maximum number of matches to return (default: 30)
   --fields <a,b,c>                Append extra fields: body, closedAt, labels, milestone, updatedAt, url
+  --full                          Show the body field raw, without 500-char truncation
   --help                          Show this help
 
 global flags:
@@ -82,7 +85,7 @@ const SEARCH_FIELDS: FieldDef<Issue>[] = [
 // Appended to the locator schema on request via `--fields`, never replacing it.
 // Results are Issue-shaped, so this mirrors `issue list`'s extra-field vocabulary.
 const SEARCH_EXTRA_FIELDS: Record<string, FieldDef<Issue>> = {
-  body: pluck("body"),
+  body: truncatedBody("body"),
   closedAt: relativeTimeField("closedAt", "closed_at"),
   labels: joined("labels", "labels", "name"),
   milestone: pluck("milestone", "milestone.title"),
@@ -155,6 +158,7 @@ async function runSearch(deps: CliDeps, args: string[], kind: SearchKind): Promi
       "--label": { takesValue: true },
       "--limit": { takesValue: true },
       "--fields": { takesValue: true },
+      "--full": { takesValue: false },
     },
     kind.command,
   );
@@ -175,6 +179,7 @@ async function runSearch(deps: CliDeps, args: string[], kind: SearchKind): Promi
   const limitFlag = flags["--limit"];
   const limit =
     limitFlag === undefined ? DEFAULT_LIMIT : parsePositiveInt(limitFlag, "--limit", helpSuggestion);
+  const full = flags["--full"] === true;
   const extraFields = selectExtraFields(
     flagValue(flags, "--fields"),
     SEARCH_EXTRA_FIELDS,
@@ -208,7 +213,9 @@ async function runSearch(deps: CliDeps, args: string[], kind: SearchKind): Promi
   const total = matches.length;
   const shown = matches.slice(0, limit);
   const now = new Date();
-  const rows = shown.map((issue) => extractRow(issue, [...SEARCH_FIELDS, ...extraFields], { now }));
+  const rows = shown.map((issue) =>
+    extractRow(issue, [...SEARCH_FIELDS, ...extraFields], { now, host: context.host, full }),
+  );
 
   return renderList({
     noun: kind.noun,

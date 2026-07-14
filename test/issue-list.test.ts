@@ -469,6 +469,49 @@ describe("issue list --fields", () => {
     expect(row).toMatch(/\d+(mo|[smhdy]) ago/);
   });
 
+  it("truncates an over-limit body inline, appending the same hint as issue view", async () => {
+    const fullBody = "x".repeat(650);
+    server = await startFixtureServer([
+      {
+        method: "GET",
+        path: ISSUES_PATH,
+        headers: { "X-Total-Count": "1" },
+        body: [{ ...issueOf(50), body: fullBody }],
+      },
+    ]);
+    const { stdout, exitCode } = await runCliTest(
+      ["issue", "list", "--fields", "body"],
+      { env: testModeEnv(server.url) },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("x".repeat(500));
+    expect(stdout).toContain(
+      "... (truncated, 650 chars total - use --full to see complete body)",
+    );
+    expect(stdout).not.toContain("x".repeat(650));
+  });
+
+  it("returns the complete body untruncated under --full, with no truncation hint", async () => {
+    const fullBody = "x".repeat(650);
+    server = await startFixtureServer([
+      {
+        method: "GET",
+        path: ISSUES_PATH,
+        headers: { "X-Total-Count": "1" },
+        body: [{ ...issueOf(50), body: fullBody }],
+      },
+    ]);
+    const { stdout, exitCode } = await runCliTest(
+      ["issue", "list", "--fields", "body", "--full"],
+      { env: testModeEnv(server.url) },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("x".repeat(650));
+    expect(stdout).not.toContain("truncated");
+  });
+
   it("rejects an unknown --fields name with exit code 2", async () => {
     server = await startFixtureServer([]);
     const { stdout, exitCode } = await runCliTest(

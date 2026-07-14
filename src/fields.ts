@@ -1,8 +1,13 @@
+import { BODY_TRUNCATE_LIMIT, truncateBody } from "./body.js";
 import { axiError } from "./errors.js";
 import { relativeTime } from "./time.js";
 
 export interface ExtractContext {
   now: Date;
+  /** Hostname for `cleanBody`'s Gitea URL normalization when a body is truncated. */
+  host: string;
+  /** When set, `truncatedBody` returns the raw body — the `--full` affordance. */
+  full: boolean;
 }
 
 export interface FieldDef<T> {
@@ -62,6 +67,26 @@ export function joined<T>(name: string, path: string, key: string): FieldDef<T> 
         .map((item) => pluckPath(item, key))
         .filter((item): item is string => typeof item === "string" && item.length > 0)
         .join(", ");
+    },
+  };
+}
+
+/**
+ * Render a `body` field under Principle 3's content truncation — identical to
+ * how `issue view` / `pr view` present a body: over-limit bodies are cleaned and
+ * cut to 500 chars with the inline "... (truncated, N chars total ...)" hint,
+ * while short bodies pass through byte-for-byte. `context.full` (the `--full`
+ * flag) suppresses truncation and returns the raw body. This is the single
+ * ruling applied everywhere `body` is offered via `--fields` (see task 0021):
+ * `issue list --limit 30 --fields body` must not spill 30 full bodies into an
+ * agent's context, the exact cost the truncation principle exists to prevent.
+ */
+export function truncatedBody<T>(name: string, path: string = name): FieldDef<T> {
+  return {
+    name,
+    extract: (raw, context) => {
+      const value = String(pluckPath(raw, path) ?? "");
+      return context.full ? value : truncateBody(value, BODY_TRUNCATE_LIMIT, context.host);
     },
   };
 }

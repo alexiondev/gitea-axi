@@ -145,7 +145,7 @@ async function prRowsWithReview(
 ): Promise<Record<string, unknown>[]> {
   const decisions = await pullDecisions(api, context, pulls);
   return pulls.map((pull, index) => {
-    const row = extractRow(pull, fields, { now });
+    const row = extractRow(pull, fields, { now, host: context.host, full: false });
     row.review = decisions[index];
     return row;
   });
@@ -187,7 +187,9 @@ async function shortDashboard(api: GiteaClient, context: RepoContext): Promise<s
 
   const now = new Date();
   const prRows = await prRowsWithReview(api, context, openPulls.pulls, SHORT_PR_FIELDS, now);
-  const issueRows = issues.map((issue) => extractRow(issue, SHORT_ISSUE_FIELDS, { now }));
+  const issueRows = issues.map((issue) =>
+    extractRow(issue, SHORT_ISSUE_FIELDS, { now, host: context.host, full: false }),
+  );
 
   return [
     `repo: ${context.owner}/${context.name}`,
