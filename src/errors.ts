@@ -55,7 +55,9 @@ function pathname(url: string): string {
 }
 
 const ISSUE_PATH = /\/repos\/[^/]+\/[^/]+\/issues\/(\d+)(?:\/|$)/;
-const PULL_PATH = /\/repos\/[^/]+\/[^/]+\/pulls\/(\d+)(?:\/|$)/;
+// The trailing `.` case covers the `.diff`/`.patch` download paths, whose PR
+// number is followed by a suffix rather than a `/` or the end of the path.
+const PULL_PATH = /\/repos\/[^/]+\/[^/]+\/pulls\/(\d+)(?:[./]|$)/;
 const REPO_PATH = /\/repos\/([^/]+)\/([^/]+)(?:\/|$)/;
 
 function classify404(response: HttpResponseLike): AxiError {
