@@ -19,6 +19,7 @@ Decide, then make the spec and the code agree:
 - If `--fields body` is genuinely exempt, amend Principle 3 to carve out the exemption explicitly and say why, so the next slice offering a `body` field does not have to re-derive it.
 
 Whichever way it goes, `issue list`, `issue create`, and any later command exposing `body` via `--fields` must behave the same.
+The ruling is verified at the fixture/unit tier only: body truncation is deterministic string processing over a body the CLI already holds, with no live-Gitea response semantics for an end-to-end test to attest to, so no e2e case is warranted here.
 
 ## Acceptance criteria
 

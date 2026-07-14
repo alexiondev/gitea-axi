@@ -20,3 +20,4 @@ Issue fetching passes `type=issues`; outside a recognizable Gitea repo the dashb
 - [ ] Issue fetches pass `type=issues` so PRs never appear in the issue block
 - [ ] Outside a Gitea repo the dashboard exits with `REPO_NOT_FOUND` and help mentioning `-R` and `--login`
 - [ ] Fixture-server tests cover both tiers, the cap-and-suffix behavior, empty states, and the no-repo error
+- [ ] End-to-end tests render the bare dashboard and `--full` against a live Gitea instance, confirming the live issue/PR list response shapes and that the computed `review` and label-aggregation fields hold against real responses — behavior the fixture server cannot attest to

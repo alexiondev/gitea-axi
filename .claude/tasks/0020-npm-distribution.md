@@ -9,6 +9,7 @@ Publish readiness for the unscoped `gitea-axi` npm package.
 Package metadata (name, description, repository, license, engines for Node 20+, ESM), the `gitea-axi` bin entry, and the bundled Agent Skill file included in the published artifact.
 No postinstall script — the install delivers the CLI binary only, and skill installation stays behind the explicit `setup` command.
 Verify the packed artifact: a global install from the packed tarball yields a working binary whose `setup` finds the bundled skill.
+This tarball-and-global-install check is the applicable real-integration surface for this slice; distribution touches no Gitea API, so there is no live-Gitea end-to-end case — the packaging smoke test below stands in its place.
 
 ## Acceptance criteria
 

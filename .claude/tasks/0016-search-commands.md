@@ -19,3 +19,4 @@ Both commands use the locator schema (`number`, `title`, `state`, `author`, `cre
 - [ ] `--state`, `--label`, `--limit`, and `--fields` work; default fields are the locator schema
 - [ ] Empty results emit the standard `<noun>[0]: (none)` empty state
 - [ ] Fixture-server tests cover both types, cross-repo results being filtered out, and the missing-query validation
+- [ ] End-to-end tests run `search issues` and `search prs` against a live Gitea instance and assert real matches are returned with the locator schema, confirming the live search-endpoint response shape and the `type`/`owner`/`q` query behavior the fixture server cannot attest to

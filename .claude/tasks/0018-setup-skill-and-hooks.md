@@ -11,6 +11,7 @@ Author the Agent Skill markdown as a minimal pointer, not a command reference: f
 `setup hooks` installs a SessionStart hook via axi-sdk-js's `installSessionStartHooks()` for Claude Code, Codex, and OpenCode; the hook runs the bare binary (short dashboard tier) at session start.
 `update` shadows the SDK's built-in self-update command, failing with `VALIDATION_ERROR` and a help line pointing at the npm update command, keeping the ten-code error list intact.
 There is no postinstall script — skill and hook installation are always explicit user actions.
+These commands touch only the local filesystem, not the Gitea API, so their real-integration surface is the CLI seam against a temporary HOME rather than the live-Gitea end-to-end tier — there is no live-Gitea behavior for an e2e test to attest to here.
 
 ## Acceptance criteria
 
@@ -18,4 +19,4 @@ There is no postinstall script — skill and hook installation are always explic
 - [ ] `gitea-axi setup` installs the skill and outputs `setup: { skill, path, status }`; re-running reports `updated` or `unchanged` rather than failing
 - [ ] `gitea-axi setup hooks` registers the SessionStart hook for all three integrations via the SDK and outputs the `hooks:` block with a restart help line; managed entries are updated in place on re-run
 - [ ] `gitea-axi update` fails with `VALIDATION_ERROR` (exit 2) and the npm update help line; the SDK's `UPDATE_ERROR` never surfaces
-- [ ] Tests cover the setup idempotency states and the update shadow (hook installation verified against a temp home directory)
+- [ ] Integration tests drive `setup`, `setup hooks`, and `update` at the CLI seam against a temporary HOME, asserting the real skill file and the three managed hook configs are written and updated in place, and covering the setup idempotency states and the update shadow (this temp-HOME filesystem tier is the applicable real-integration test; these commands make no Gitea API calls, so there is no live-Gitea e2e case)
