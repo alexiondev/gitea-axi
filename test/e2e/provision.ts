@@ -250,6 +250,18 @@ export async function fetchOpenPulls(
   return (await res.json()) as Record<string, unknown>[];
 }
 
+/** Fetch the repository's labels as Gitea returns them, for verifying what a
+ * label mutation wrote against live state rather than the CLI's own echo. */
+export async function fetchLabels(instance: E2EInstance): Promise<Record<string, unknown>[]> {
+  const res = await apiRequest(
+    instance.baseUrl,
+    "GET",
+    `/repos/${instance.owner}/${instance.repo}/labels`,
+    instance.token,
+  );
+  return (await res.json()) as Record<string, unknown>[];
+}
+
 /** Fetch a single issue as Gitea returns it, for verifying what a mutation wrote. */
 export async function fetchIssue(
   instance: E2EInstance,

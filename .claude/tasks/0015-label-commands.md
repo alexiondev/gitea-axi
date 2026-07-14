@@ -20,6 +20,7 @@ The label command group: `label list`, `label create`, `label edit`, `label dele
 - [x] `label edit`/`label delete` on an unknown name yield `VALIDATION_ERROR` (exit 2)
 - [x] `label delete <name>` outputs `delete: ok` + `label: <name>`
 - [x] Fixture-server tests cover create, idempotent re-create, edit, delete, and the unknown-name refusals
+- [x] End-to-end tests exercise the live-Gitea semantics the fixture server cannot attest to: the `#`-prefixed color round-trip on create, idempotency against the live listing, and name→id resolution behind edit/delete (plus the not-idempotent delete refusal)
 
 ## Implementation Notes
 
@@ -38,3 +39,14 @@ Added `renderObject(item, help)` to `src/render.ts` because the label create/edi
 - **Shared lookup + positional helpers (cleanups from review).**
 Extracted `findLabel`/`resolveLabel` and a shared `labelNotFound` message into `src/lookup.ts`, reused by the existing `resolveLabelIds`; and extracted `parseSinglePositional` in `src/flags.ts`, now shared by `parsePositionalNumber` and the label name positionals, removing the duplicated count-check/error scaffolding.
 - **`label list` uses a single-page fetch with `--limit` (default 500)**, reading `X-Total-Count` for the count line, rather than the exhaustive pagination `resolveLabel`/`resolveLabelIds` use; the spec asks only for `--limit`, and a repo with >500 labels is signalled by the `count: N of T total` line.
+
+### Follow-ups added after review
+
+- **End-to-end tier extended.**
+The task originally scoped its tests to the fixture-server tier only, matching the precedent of the preceding PR-command tasks (0011–0014), none of which added e2e cases.
+On reflection the label commands sit squarely inside the e2e tier's charter — "behavior the fixture server cannot attest to" — because a fixture server never enforces that Gitea's `CreateLabelOption.color` requires the leading `#`, nor that edit/delete really key on the numeric label id.
+Added a `test/e2e/mutations.test.ts` label-lifecycle case (create → idempotent re-create → edit → delete, verified against live state via a new `fetchLabels` provisioner helper) plus the not-idempotent delete refusal.
+These run only in CI (gated on `GITEA_AXI_E2E_URL`).
+- **Unit-tier coverage backfill.**
+The initial fixture tests covered only the happy paths and unknown-name refusals, leaving the help output, validation errors, and API-error propagation untested — enough to drop the repo below its global branch-coverage gate.
+Added confirming fixture tests for those behaviors, bringing `src/commands/label.ts` to ~96% line / ~86% branch and the suite back over its thresholds.

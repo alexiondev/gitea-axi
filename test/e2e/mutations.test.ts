@@ -3,6 +3,7 @@ import { runCliTest } from "../harness.js";
 import {
   fetchComments,
   fetchIssue,
+  fetchLabels,
   fetchOpenPulls,
   provisionInstance,
   seedBranch,
@@ -214,5 +215,90 @@ describe.skipIf(!E2E_URL)("end-to-end: pull request mutations", () => {
     const comments = await fetchComments(instance, number);
     expect(comments).toHaveLength(1);
     expect(comments[0]!.body).toBe("A PR comment from the e2e tier.");
+  });
+});
+
+describe.skipIf(!E2E_URL)("end-to-end: label mutations", () => {
+  let instance: E2EInstance;
+  // Unique to this block so it never collides with the seeded instance.labelName.
+  const NAME = "E2E-Lifecycle";
+
+  function env(): Record<string, string> {
+    return envFor(instance);
+  }
+
+  beforeAll(async () => {
+    instance = await instanceOnce();
+  }, 150_000);
+
+  /** The repo's labels named `name`, matched case-insensitively. */
+  async function labelsNamed(name: string): Promise<Record<string, unknown>[]> {
+    const labels = await fetchLabels(instance);
+    return labels.filter(
+      (label) => String(label.name).toLowerCase() === name.toLowerCase(),
+    );
+  }
+
+  /** A color as Gitea returned it, with any leading `#` stripped for comparison. */
+  function normalizedColor(label: Record<string, unknown>): string {
+    return String(label.color).replace(/^#/, "");
+  }
+
+  it("creates, re-creates idempotently, edits, and deletes a label against live Gitea", async () => {
+    // 1. Create: the CLI prepends `#` to the color, which live Gitea requires.
+    const created = await runCliTest(
+      ["label", "create", "--name", NAME, "--color", "ff0000"],
+      { env: env() },
+    );
+    expect(created.exitCode).toBe(0);
+    expect(created.stdout).toContain("created: ok");
+    expect(created.stdout).toContain(`label: ${NAME}`);
+
+    const afterCreate = await labelsNamed(NAME);
+    expect(afterCreate).toHaveLength(1);
+    expect(normalizedColor(afterCreate[0]!)).toBe("ff0000");
+
+    // 2. Re-create with different casing: the live listing is checked
+    //    case-insensitively, so no second label is made and nothing changes.
+    const recreated = await runCliTest(
+      ["label", "create", "--name", NAME.toUpperCase(), "--color", "00ff00"],
+      { env: env() },
+    );
+    expect(recreated.exitCode).toBe(0);
+    expect(recreated.stdout).toContain("create: already_exists");
+    expect(recreated.stdout).toContain(`label: ${NAME}`);
+
+    const afterRecreate = await labelsNamed(NAME);
+    expect(afterRecreate).toHaveLength(1);
+    expect(normalizedColor(afterRecreate[0]!)).toBe("ff0000");
+
+    // 3. Edit: name→id resolution plus PATCH-by-id, verified live.
+    const edited = await runCliTest(
+      ["label", "edit", NAME, "--color", "00ff00"],
+      { env: env() },
+    );
+    expect(edited.exitCode).toBe(0);
+    expect(edited.stdout).toContain("edit: ok");
+
+    const afterEdit = await labelsNamed(NAME);
+    expect(afterEdit).toHaveLength(1);
+    expect(normalizedColor(afterEdit[0]!)).toBe("00ff00");
+
+    // 4. Delete: name→id resolution plus DELETE-by-id, verified live.
+    const deleted = await runCliTest(["label", "delete", NAME], { env: env() });
+    expect(deleted.exitCode).toBe(0);
+    expect(deleted.stdout).toContain("delete: ok");
+
+    expect(await labelsNamed(NAME)).toHaveLength(0);
+  });
+
+  it("refuses to delete a label that does not exist", async () => {
+    const { stdout, exitCode } = await runCliTest(
+      ["label", "delete", "no-such-label-xyz"],
+      { env: env() },
+    );
+
+    expect(exitCode).toBe(2);
+    expect(stdout).toContain("code: VALIDATION_ERROR");
   });
 });
