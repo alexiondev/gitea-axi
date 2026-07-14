@@ -1,18 +1,21 @@
 import { readFileSync } from "node:fs";
 import { exitCodeForError, runAxiCli, AxiError } from "axi-sdk-js";
+import { dashboardCommand } from "./commands/dashboard.js";
 import { issueCommand } from "./commands/issue.js";
 import { labelCommand } from "./commands/label.js";
 import { prCommand } from "./commands/pr.js";
 import { searchCommand } from "./commands/search.js";
-import { resolveRepoContext } from "./context.js";
 import type { CliDeps, GlobalFlags } from "./deps.js";
 import { consumeFlagValue, splitFlag } from "./flags.js";
 import { renderErrorOutput } from "./render.js";
-import { suggestCommand } from "./suggestions.js";
 
 const DESCRIPTION = "Agent-ergonomic CLI for Gitea issues and pull requests";
 
 const TOP_LEVEL_HELP = `usage: gitea-axi <command> [flags]
+
+Run with no command to see the repository dashboard (open issues and pull
+requests); add --full for the rich view (the open-PR table and issue counts
+by label).
 
 commands:
   issue list       List issues in the current repository
@@ -77,19 +80,6 @@ function readVersion(): string {
   return packageJson.version;
 }
 
-function homeCommand(deps: CliDeps) {
-  return async (): Promise<Record<string, unknown>> => {
-    const context = await resolveRepoContext(deps);
-    return {
-      repo: `${context.owner}/${context.name}`,
-      help: [
-        suggestCommand(context, "issue list", "to list open issues"),
-        "Run `gitea-axi --help` to see available commands",
-      ],
-    };
-  };
-}
-
 export interface RunCliOptions {
   argv: string[];
   env: Record<string, string | undefined>;
@@ -113,10 +103,16 @@ export async function runCli(options: RunCliOptions): Promise<number> {
     cwd: options.cwd,
     globals: extracted.globals,
   };
+  // The dashboard's full tier is `gitea-axi --full`. The SDK rejects any flag
+  // before a command, so `--full` never reaches the home handler on its own; it
+  // is pulled out here when it is the sole remaining argument, leaving an empty
+  // argv for the SDK to dispatch to the home handler in full-tier mode.
+  const full = extracted.argv.length === 1 && extracted.argv[0] === "--full";
+  const argv = full ? [] : extracted.argv;
   await runAxiCli({
     description: DESCRIPTION,
     version: readVersion(),
-    argv: extracted.argv,
+    argv,
     topLevelHelp: TOP_LEVEL_HELP,
     commands: {
       issue: issueCommand(deps),
@@ -124,7 +120,7 @@ export async function runCli(options: RunCliOptions): Promise<number> {
       label: labelCommand(deps),
       search: searchCommand(deps),
     },
-    home: homeCommand(deps),
+    home: dashboardCommand(deps, full),
     stdout: options.stdout,
   });
   return typeof process.exitCode === "number" ? process.exitCode : 0;

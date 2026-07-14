@@ -16,6 +16,12 @@ export interface PaginatedResult<T> {
   items: T[];
   /** `X-Total-Count`, absent when the header is missing or not a number. */
   total: number | undefined;
+  /**
+   * True when pagination stopped at the page cap with every page full, so the
+   * set may be incomplete — the dashboard's issue aggregation suffixes its
+   * counts with `+` in this case (see the spec's hard 1000-issue cap).
+   */
+  capped: boolean;
 }
 
 export function readTotalCount(headers: Headers): number | undefined {
@@ -48,9 +54,11 @@ export async function fetchAllPages<T>(
     }
     const batch = response.data ?? [];
     items.push(...batch);
+    // A short page is the last page: the set is complete.
     if (batch.length < PAGE_SIZE) {
-      break;
+      return { items, total, capped: false };
     }
   }
-  return { items, total };
+  // Every page up to the cap came back full, so there may be more beyond it.
+  return { items, total, capped: true };
 }

@@ -159,6 +159,21 @@ describe("repository context detection", () => {
     expect(stdout).toContain("code: REPO_NOT_FOUND");
   });
 
+  it("shows REPO_NOT_FOUND with -R/--login help for the bare dashboard outside a Gitea repo", async () => {
+    const cwd = makeRepo(undefined);
+    const bin = makeSandbox({ logins: [] });
+
+    const { stdout, exitCode } = await runCliTest([], {
+      env: { PATH: bin },
+      cwd,
+    });
+
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("code: REPO_NOT_FOUND");
+    expect(stdout).toContain("-R");
+    expect(stdout).toContain("--login");
+  });
+
   it("fails with TEA_NOT_INSTALLED when the tea binary is missing", async () => {
     const cwd = makeRepo("https://gitea.example.com/testowner/testrepo.git");
     const bin = makeSandbox({ tea: false });
