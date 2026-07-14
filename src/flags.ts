@@ -148,6 +148,32 @@ export function parseIssueNumber(raw: string, noun: string, suggestions: string[
 }
 
 /**
+ * Take the single positional of a `<command> <arg>` invocation, rejecting a
+ * missing or extra one. `what` is the noun phrase the arg is ("an issue number",
+ * "a label name") and `placeholder` is how it reads in the usage line
+ * (`<number>`, `<name>`); the count checks and their messages are identical for
+ * every single-positional command, number or name.
+ */
+export function parseSinglePositional(
+  positionals: string[],
+  command: string,
+  what: string,
+  placeholder: string,
+): string {
+  if (positionals.length === 0) {
+    throw axiError(`${command} requires ${what}`, "VALIDATION_ERROR", [
+      `Run \`gitea-axi ${command} ${placeholder}\``,
+    ]);
+  }
+  if (positionals.length > 1) {
+    throw axiError(`Unexpected argument: ${positionals[1]}`, "VALIDATION_ERROR", [
+      `Run \`gitea-axi ${command} --help\` to see available flags`,
+    ]);
+  }
+  return positionals[0]!;
+}
+
+/**
  * Parse the single positional number of a `<command> <number>` invocation.
  * `noun` names what the number identifies ("issue", "pull request") and appears
  * in the errors; the parsing itself is identical for both.
@@ -157,18 +183,10 @@ export function parsePositionalNumber(
   command: string,
   noun: string,
 ): number {
-  const helpSuggestion = [`Run \`gitea-axi ${command} --help\` to see available flags`];
-  if (positionals.length === 0) {
-    throw axiError(
-      `${command} requires ${withArticle(noun)} number`,
-      "VALIDATION_ERROR",
-      [`Run \`gitea-axi ${command} <number>\``],
-    );
-  }
-  if (positionals.length > 1) {
-    throw axiError(`Unexpected argument: ${positionals[1]}`, "VALIDATION_ERROR", helpSuggestion);
-  }
-  return parseIssueNumber(positionals[0]!, noun, helpSuggestion);
+  const raw = parseSinglePositional(positionals, command, `${withArticle(noun)} number`, "<number>");
+  return parseIssueNumber(raw, noun, [
+    `Run \`gitea-axi ${command} --help\` to see available flags`,
+  ]);
 }
 
 export function parseFlags(

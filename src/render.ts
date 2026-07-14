@@ -56,6 +56,16 @@ export function renderScalar(noun: string, value: string, help: string[]): strin
   return [`${noun}: ${value}`, encode({ help })].join("\n");
 }
 
+/**
+ * A flat top-level field map followed by the help block — for outputs whose
+ * fields sit at the top level rather than nested under an entity noun (e.g.
+ * `created: ok` / `label: <name>`). Distinct from {@link renderDetail}, which
+ * wraps its fields in a `noun:` block.
+ */
+export function renderObject(item: Record<string, unknown>, help: string[]): string {
+  return [encode(item), encode({ help })].join("\n");
+}
+
 /** A secondary list block appended below a detail entity (e.g. comments). */
 export interface DetailBlock {
   noun: string;

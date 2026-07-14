@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { exitCodeForError, runAxiCli, AxiError } from "axi-sdk-js";
 import { issueCommand } from "./commands/issue.js";
+import { labelCommand } from "./commands/label.js";
 import { prCommand } from "./commands/pr.js";
 import { resolveRepoContext } from "./context.js";
 import type { CliDeps, GlobalFlags } from "./deps.js";
@@ -19,6 +20,8 @@ commands:
   issue comment    Post a comment on an issue or pull request
   pr create        Create a pull request
   pr comment       Post a comment on a pull request
+  label list       List labels in the current repository
+  label create     Create a label
 
 global flags:
   -R, --repo <OWNER/NAME>   Override the repository detected from the git origin remote
@@ -115,6 +118,7 @@ export async function runCli(options: RunCliOptions): Promise<number> {
     commands: {
       issue: issueCommand(deps),
       pr: prCommand(deps),
+      label: labelCommand(deps),
     },
     home: homeCommand(deps),
     stdout: options.stdout,

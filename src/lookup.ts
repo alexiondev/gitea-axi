@@ -1,3 +1,4 @@
+import type { AxiError } from "axi-sdk-js";
 import type { Label } from "gitea-js";
 import type { GiteaClient } from "./client.js";
 import type { RepoContext } from "./context.js";
@@ -10,7 +11,7 @@ import { fetchAllPages } from "./paginate.js";
  */
 
 /** Fetch every label in the repository, paging until the API runs out. */
-async function listAllLabels(api: GiteaClient, context: RepoContext): Promise<Label[]> {
+export async function listAllLabels(api: GiteaClient, context: RepoContext): Promise<Label[]> {
   try {
     const { items } = await fetchAllPages<Label>((page, limit) =>
       api.repos.issueListLabels(context.owner, context.name, { page, limit }),
@@ -19,6 +20,46 @@ async function listAllLabels(api: GiteaClient, context: RepoContext): Promise<La
   } catch (error) {
     throw classifyHttpError(error);
   }
+}
+
+/**
+ * Find a label by name within an already-fetched set, case-insensitively. First
+ * match wins so a duplicate name resolves deterministically, matching the id
+ * resolution in {@link resolveLabelIds}.
+ */
+export function findLabel(labels: Label[], name: string): Label | undefined {
+  const key = name.toLowerCase();
+  return labels.find((label) => label.name?.toLowerCase() === key);
+}
+
+/** The `Label "x" not found` VALIDATION_ERROR, listing what the repo does have. */
+function labelNotFound(context: RepoContext, name: string, labels: Label[]): AxiError {
+  const available = labels
+    .map((label) => label.name)
+    .filter((label): label is string => Boolean(label));
+  return axiError(
+    `Label "${name}" not found in ${context.owner}/${context.name}` +
+      (available.length > 0 ? ` (available: ${available.join(", ")})` : ""),
+    "VALIDATION_ERROR",
+  );
+}
+
+/**
+ * Resolve a single label name to its label, case-insensitively, for the commands
+ * that take a positional `<name>` (`label edit`, `label delete`). A name that
+ * matches nothing is a `VALIDATION_ERROR`, never a silent no-op (see ADR 0010).
+ */
+export async function resolveLabel(
+  api: GiteaClient,
+  context: RepoContext,
+  name: string,
+): Promise<Label> {
+  const labels = await listAllLabels(api, context);
+  const match = findLabel(labels, name);
+  if (!match) {
+    throw labelNotFound(context, name, labels);
+  }
+  return match;
 }
 
 /**
@@ -51,14 +92,7 @@ export async function resolveLabelIds(
   for (const name of names) {
     const id = byName.get(name.toLowerCase());
     if (id === undefined) {
-      const available = labels
-        .map((label) => label.name)
-        .filter((label): label is string => Boolean(label));
-      throw axiError(
-        `Label "${name}" not found in ${context.owner}/${context.name}` +
-          (available.length > 0 ? ` (available: ${available.join(", ")})` : ""),
-        "VALIDATION_ERROR",
-      );
+      throw labelNotFound(context, name, labels);
     }
     ids.push(id);
   }
