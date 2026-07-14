@@ -5,6 +5,8 @@ import { issueCommand } from "./commands/issue.js";
 import { labelCommand } from "./commands/label.js";
 import { prCommand } from "./commands/pr.js";
 import { searchCommand } from "./commands/search.js";
+import { setupCommand } from "./commands/setup.js";
+import { updateCommand } from "./commands/update.js";
 import type { CliDeps, GlobalFlags } from "./deps.js";
 import { consumeFlagValue, splitFlag } from "./flags.js";
 import { renderErrorOutput } from "./render.js";
@@ -28,6 +30,7 @@ commands:
   label create     Create a label
   search issues    Full-text search for issues in the current repository
   search prs       Full-text search for pull requests in the current repository
+  setup            Install the bundled Agent Skill (setup hooks adds the session-start hook)
 
 global flags:
   -R, --repo <OWNER/NAME>   Override the repository detected from the git origin remote
@@ -119,6 +122,9 @@ export async function runCli(options: RunCliOptions): Promise<number> {
       pr: prCommand(deps),
       label: labelCommand(deps),
       search: searchCommand(deps),
+      setup: setupCommand(deps),
+      // Shadow the SDK's built-in `update` self-update command (ADR 0013).
+      update: updateCommand(deps),
     },
     home: dashboardCommand(deps, full),
     stdout: options.stdout,
