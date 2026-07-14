@@ -16,3 +16,7 @@ Fall back to `tea pr create --login alexion --base main --head <branch>` only fo
 
 Task branches are merged into `main` on the remote, so the local `main` goes stale.
 Always `git fetch origin` and cut a task branch from `origin/main`, not from whatever local `main` happens to point at.
+
+Gitea's issue/PR search endpoint (`GET /repos/issues/search`, behind `search issues`/`search prs`) is backed by an **asynchronous, eventually-consistent issue indexer** (bleve by default).
+Content created moments earlier may not be searchable yet, so end-to-end assertions that create an issue/PR and then search for it must poll (e.g. `expect.poll`) until it is indexed rather than searching once.
+The fixture tier is unaffected — it stubs the endpoint — so this bites only the live `test/e2e` tier.

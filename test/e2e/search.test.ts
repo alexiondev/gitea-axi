@@ -45,6 +45,16 @@ describe.skipIf(!E2E_URL)("end-to-end: search commands", () => {
   }, 150_000);
 
   it("returns live issue matches under the locator schema", async () => {
+    // Gitea's search endpoint is backed by an eventually-consistent issue
+    // indexer, so poll until the seeded issue has been indexed and surfaces
+    // under the locator-schema header before asserting on the exact output.
+    await expect
+      .poll(
+        async () => (await runCliTest(["search", "issues", "issue"], { env: env() })).stdout,
+        { timeout: 20_000, interval: 500 },
+      )
+      .toMatch(/^issues\[\d+\]\{number,title,state,author,created\}:$/m);
+
     const { stdout, exitCode } = await runCliTest(["search", "issues", "issue"], {
       env: env(),
     });
@@ -61,6 +71,15 @@ describe.skipIf(!E2E_URL)("end-to-end: search commands", () => {
   });
 
   it("returns live pull-request matches under the locator schema", async () => {
+    // The PR was opened moments ago in beforeAll; the indexer needs a beat to
+    // catch up, so poll the search until the PR surfaces before asserting.
+    await expect
+      .poll(
+        async () => (await runCliTest(["search", "prs", "search"], { env: env() })).stdout,
+        { timeout: 20_000, interval: 500 },
+      )
+      .toMatch(/^pull_requests\[\d+\]\{number,title,state,author,created\}:$/m);
+
     const { stdout, exitCode } = await runCliTest(["search", "prs", "search"], {
       env: env(),
     });
