@@ -3,6 +3,7 @@ import { exitCodeForError, runAxiCli, AxiError } from "axi-sdk-js";
 import { issueCommand } from "./commands/issue.js";
 import { labelCommand } from "./commands/label.js";
 import { prCommand } from "./commands/pr.js";
+import { searchCommand } from "./commands/search.js";
 import { resolveRepoContext } from "./context.js";
 import type { CliDeps, GlobalFlags } from "./deps.js";
 import { consumeFlagValue, splitFlag } from "./flags.js";
@@ -22,6 +23,8 @@ commands:
   pr comment       Post a comment on a pull request
   label list       List labels in the current repository
   label create     Create a label
+  search issues    Full-text search for issues in the current repository
+  search prs       Full-text search for pull requests in the current repository
 
 global flags:
   -R, --repo <OWNER/NAME>   Override the repository detected from the git origin remote
@@ -119,6 +122,7 @@ export async function runCli(options: RunCliOptions): Promise<number> {
       issue: issueCommand(deps),
       pr: prCommand(deps),
       label: labelCommand(deps),
+      search: searchCommand(deps),
     },
     home: homeCommand(deps),
     stdout: options.stdout,
