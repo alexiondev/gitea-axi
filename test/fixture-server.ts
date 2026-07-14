@@ -13,6 +13,11 @@ export interface FixtureRoute {
   body?: unknown;
   /** Name of a JSON file in test/fixtures to serve as the body. */
   fixture?: string;
+  /**
+   * A verbatim, non-JSON response body (e.g. a raw `.diff`). Served as-is with a
+   * `text/plain` content type, bypassing the JSON encoding the other fields get.
+   */
+  raw?: string;
 }
 
 export interface RecordedRequest {
@@ -94,6 +99,14 @@ export async function startFixtureServer(routes: FixtureRoute[]): Promise<Fixtur
             message: `no fixture route matched ${recorded.method} ${recorded.path} ${JSON.stringify(recorded.query)}`,
           }),
         );
+        return;
+      }
+      if (route.raw !== undefined) {
+        res.writeHead(route.status ?? 200, {
+          "content-type": "text/plain",
+          ...route.headers,
+        });
+        res.end(route.raw);
         return;
       }
       res.writeHead(route.status ?? 200, {

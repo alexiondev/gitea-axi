@@ -37,7 +37,8 @@ import {
   splitFlag,
 } from "../flags.js";
 import { fetchChecks } from "../checks.js";
-import { currentBranch } from "../git.js";
+import { fetchPullDiff, truncateDiff } from "../diff.js";
+import { checkoutPullHead, currentBranch } from "../git.js";
 import { resolveLabelIds, resolveMilestoneId } from "../lookup.js";
 import { fetchAllPages, readTotalCount } from "../paginate.js";
 import { formatCountLine, renderDetail, renderList, renderScalar, type DetailBlock } from "../render.js";
@@ -50,6 +51,8 @@ export const PR_HELP = `usage: gitea-axi pr <command> [flags]
 commands:
   list       List pull requests in the current repository
   view       Show a single pull request's details
+  diff       Show a pull request's raw diff
+  checkout   Check the pull request's head branch out locally
   checks     Show a pull request's CI check results
   create     Create a pull request
   edit       Edit a pull request's title, body, labels, assignees, reviewers, milestone, or base
@@ -171,6 +174,34 @@ export const PR_CHECKS_HELP = `usage: gitea-axi pr checks <number>
 
 Show the CI check results for a pull request, derived from its head commit's
 combined status.
+
+flags:
+  --help                Show this help
+
+global flags:
+  -R, --repo <OWNER/NAME>     Override the repository detected from the git origin remote
+  --login <name>              Select a tea login profile by name
+`;
+
+export const PR_DIFF_HELP = `usage: gitea-axi pr diff <number> [flags]
+
+Show a pull request's raw unified diff. The diff is truncated at 4000 chars
+unless --full is given.
+
+flags:
+  --full                Return the complete diff without truncating it
+  --help                Show this help
+
+global flags:
+  -R, --repo <OWNER/NAME>     Override the repository detected from the git origin remote
+  --login <name>              Select a tea login profile by name
+`;
+
+export const PR_CHECKOUT_HELP = `usage: gitea-axi pr checkout <number>
+
+Check a pull request's head branch out into the current working tree, fetching
+it from origin under refs/pull/<number>/head (works for fork PRs too). Re-running
+is idempotent.
 
 flags:
   --help                Show this help
@@ -911,6 +942,60 @@ async function prChecks(deps: CliDeps, args: string[]): Promise<string> {
   });
 }
 
+async function prDiff(deps: CliDeps, args: string[]): Promise<string> {
+  if (args.includes("--help")) {
+    return PR_DIFF_HELP;
+  }
+  const { flags, positionals } = parseFlags(args, { "--full": { takesValue: false } }, "pr diff");
+  const number = parsePositionalNumber(positionals, "pr diff", "pull request");
+  const full = flags["--full"] === true;
+
+  const context = await resolveRepoContext(deps);
+  const api = createClient(context);
+  const diff = await fetchPullDiff(api, context, number);
+  const result = truncateDiff(diff, full);
+
+  const item: Record<string, unknown> = { number, diff: result.diff };
+  // The `--full` next step is prepended above the standard `pr view` line only
+  // when the diff was actually cut short; the separate `truncated`/`original_length`
+  // fields signal the cut, keeping the diff text a verbatim prefix (spec).
+  const help = [suggestCommand(context, `pr view ${number}`, "to see the pull request in full")];
+  if (result.truncated) {
+    item.truncated = true;
+    item.original_length = result.original_length;
+    help.unshift(suggestCommand(context, `pr diff ${number} --full`, "to see the complete diff"));
+  }
+  return renderDetail({ noun: "pr_diff", item, help });
+}
+
+async function prCheckout(deps: CliDeps, args: string[]): Promise<string> {
+  if (args.includes("--help")) {
+    return PR_CHECKOUT_HELP;
+  }
+  const { positionals } = parseFlags(args, {}, "pr checkout");
+  const number = parsePositionalNumber(positionals, "pr checkout", "pull request");
+
+  const context = await resolveRepoContext(deps);
+  const api = createClient(context);
+
+  // The head branch name comes from the PR fetch; the commit itself is fetched
+  // from refs/pull/<n>/head, so a fork head that is not a configured remote still
+  // resolves (ADR 0011). A PR without a head ref is the broken answer it is,
+  // rather than a branch name invented to fetch into.
+  const pull = await getPull(api, context, number);
+  const branch = pull.head?.ref;
+  if (!branch) {
+    throw axiError("Gitea returned a pull request with no head branch", "UNKNOWN");
+  }
+  await checkoutPullHead(deps, number, branch);
+
+  return renderDetail({
+    noun: "checkout",
+    item: { number, branch, status: "ok" },
+    help: [suggestCommand(context, `pr diff ${number}`, "to review the diff you checked out")],
+  });
+}
+
 async function prCreate(deps: CliDeps, args: string[]): Promise<string> {
   if (args.includes("--help")) {
     return PR_CREATE_HELP;
@@ -1569,6 +1654,12 @@ export function prCommand(deps: CliDeps) {
     }
     if (subcommand === "view") {
       return prView(deps, rest);
+    }
+    if (subcommand === "diff") {
+      return prDiff(deps, rest);
+    }
+    if (subcommand === "checkout") {
+      return prCheckout(deps, rest);
     }
     if (subcommand === "checks") {
       return prChecks(deps, rest);
