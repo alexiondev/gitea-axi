@@ -5,7 +5,7 @@ export default defineConfig({
     // Unit + integration tiers: fast, no external dependencies. The end-to-end
     // tier under test/e2e needs a live Gitea instance and runs via `test:e2e`.
     include: ["test/**/*.test.ts"],
-    exclude: ["test/e2e/**"],
+    exclude: ["test/e2e/**", "test/packaging/**"],
     coverage: {
       provider: "v8",
       reporter: ["text", "html", "lcov"],
