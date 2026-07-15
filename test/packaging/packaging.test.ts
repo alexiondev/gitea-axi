@@ -103,6 +103,10 @@ describe("npm distribution artifact", () => {
     expect(scripts?.postinstall).toBeUndefined();
   });
 
+  it("excludes the bench/ harness directory from the package", () => {
+    expect(existsSync(join(extractDir, "package", "bench"))).toBe(false);
+  });
+
   it("declares complete metadata: unscoped name, description, repo, license, engines, ESM type", () => {
     const name = packedManifest.name as string;
     expect(name).toBe("gitea-axi");
