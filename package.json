@@ -36,7 +36,8 @@
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:pack": "vitest run --config vitest.packaging.config.ts",
     "test:bench": "vitest run --config vitest.bench.config.ts",
-    "test:bench:smoke": "vitest run --config vitest.bench-smoke.config.ts"
+    "test:bench:smoke": "vitest run --config vitest.bench-smoke.config.ts",
+    "bench:run": "tsx bench/run.ts"
   },
   "dependencies": {
     "@toon-format/toon": "^2.3.0",
@@ -46,7 +47,16 @@
   "devDependencies": {
     "@types/node": "^20.19.0",
     "@vitest/coverage-v8": "^3.2.7",
+    "tsx": "^4.23.1",
     "typescript": "^5.8.0",
     "vitest": "^3.2.0"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/claude-agent-sdk": ">=0.3.0"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/claude-agent-sdk": {
+      "optional": true
+    }
   }
 }

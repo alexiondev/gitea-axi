@@ -47,8 +47,24 @@ The raw component breakdown is retained on every sample so the data can be re-we
 - `runner.ts` — the single-cell runner: `runCell` threads every layer to run one `(arm, task, trial)` cell end to end — provision, seed, run the agent bounded by a turn cap and a wall-clock backstop, audit the transcript, capture and score the post-run state, append the sample, and delete the repository. The live host and the Agent SDK are factored behind the `BenchHost` and `AgentDriver` seams, so the orchestration is unit-tested with fakes while the live wiring is validated by the smoke run.
 - `host.ts` — `liveBenchHost`, the production `BenchHost`: a thin composition of `seed.ts` (provision, seed, delete) and `snapshot.ts` (capture) bound to one set of host credentials.
 - `sdk-driver.ts` — `sdkAgentDriver`, the production `AgentDriver`: it runs one arm through the Claude Agent SDK on the maintainer's subscription, enforcing isolation in-band via the SDK's permission callback (the arm's guard on every Bash command; the shell disabled on the MCP arm) and reporting the four token components (folding in the auxiliary small model), the turn count, the imputed cost, the transcript, and the final report. The SDK is loaded through a computed dynamic import so it is an optional peer needed only for live runs.
+- `run-loop.ts` — `runCells`, the run loop: it runs one chosen `(arm, task)` cell for a batch of trials (defaulting to five, with a reporting floor of three) by driving `runCell` and the sample store, deciding only how many trials to run and at what trial numbers. Deepening a cell continues numbering past the highest trial it already holds and appends, so a cell's sample size grows across sittings rather than being overwritten. It reimplements no orchestration — provision, run, score, and append stay in `runCell`.
+- `run.ts` — the maintainer-facing run-loop command. `parseRunArgs` is the pure, unit-tested argument seam; `runBenchCommand` is the live boundary that resolves host access, resolves the scored suite against the host's self-review support, selects the task, and drives `runCells`. Invoked via `npm run bench:run` (see below).
 
-Later slices add the run-loop CLI and the aggregator.
+Later slices add the aggregator.
+
+## Running a cell
+
+The run-loop command runs one chosen cell on demand, so only the token budget available at that moment is spent:
+
+```
+GITEA_AXI_BENCH_LOGIN=<tea-login-name> npm run bench:run -- --arm gitea-axi --task close-csv-export-issue
+```
+
+It defaults to five trials per sitting with a reporting floor of three; pass `--trials <n>` to run a different batch, and `--help` for the full flag list.
+Re-running the same cell deepens it — the new trials append rather than overwrite — so a cell's sample size can be grown opportunistically across separate sittings.
+
+The command is executed with [`tsx`](https://tsx.is) (a devDependency) so the harness's TypeScript runs directly.
+Like the runner smoke tier it drives the live host and the Claude Agent SDK, so a real run needs a configured login, the `gitea-axi` CLI on `PATH`, the Agent SDK installed (`npm install @anthropic-ai/claude-agent-sdk` — an optional peer, declared but not installed by default), and a Claude subscription.
 
 ## Tests
 
