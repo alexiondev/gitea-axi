@@ -48,8 +48,12 @@ export async function resolveBenchAccess(deps: CliDeps, loginName: string): Prom
   return { apiUrl: login.url.replace(/\/+$/, ""), token };
 }
 
-/** One authenticated Gitea API round-trip; returns the raw response unchecked. */
-async function request(
+/**
+ * One authenticated Gitea API round-trip; returns the raw response unchecked.
+ * Exported so the self-review probe (self-review.ts) can inspect a non-2xx
+ * response — a host that forbids self-approval — without it being thrown.
+ */
+export async function request(
   access: BenchAccess,
   method: string,
   path: string,
