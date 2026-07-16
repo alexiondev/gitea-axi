@@ -38,7 +38,20 @@ export interface SdkDriverConfig {
 
 // --- The slice of the Claude Agent SDK this adapter consumes ------------------
 
-/** The per-request token usage the SDK reports, per model. */
+/**
+ * Per-model token usage as the SDK's `modelUsage` reports it, one entry per model
+ * the run touched. The SDK reports these in camelCase — distinct from the aggregate
+ * {@link SdkUsage} below, which it reports in the Anthropic API's snake_case shape.
+ * Reading the wrong casing silently yields zeros, so the two are kept separate.
+ */
+interface SdkModelUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
+}
+
+/** The aggregate per-request usage (snake_case), the fallback when no per-model breakdown is present. */
 interface SdkUsage {
   input_tokens?: number;
   output_tokens?: number;
@@ -46,13 +59,13 @@ interface SdkUsage {
   cache_read_input_tokens?: number;
 }
 
-interface SdkResultMessage {
+export interface SdkResultMessage {
   type: "result";
   /** `error_max_turns` when the run hit the turn cap. */
   subtype: string;
   usage?: SdkUsage;
   /** Per-model usage, including the auxiliary small model the runtime invokes. */
-  modelUsage?: Record<string, SdkUsage>;
+  modelUsage?: Record<string, SdkModelUsage>;
   total_cost_usd?: number;
   num_turns?: number;
   result?: string;
@@ -105,21 +118,30 @@ interface SdkModule {
 /**
  * Sum the four token components across every model the run touched, so the
  * auxiliary small model the runtime invokes is folded in as the metric spec
- * requires. Falls back to the aggregate `usage` when no per-model breakdown is
- * present.
+ * requires. The per-model `modelUsage` (camelCase) is the primary source; the
+ * aggregate `usage` (snake_case) is the fallback when no per-model breakdown is
+ * present. The two shapes use different field casing, so each is read with its
+ * own names — reading the wrong casing is what silently produced zero tokens.
  */
-function sumTokens(result: SdkResultMessage): TokenComponents {
-  const usages = result.modelUsage
-    ? Object.values(result.modelUsage)
-    : result.usage
-      ? [result.usage]
-      : [];
+export function sumTokens(result: SdkResultMessage): TokenComponents {
   const total: TokenComponents = { freshInput: 0, cacheCreation: 0, cacheRead: 0, output: 0 };
-  for (const usage of usages) {
-    total.freshInput += usage.input_tokens ?? 0;
-    total.cacheCreation += usage.cache_creation_input_tokens ?? 0;
-    total.cacheRead += usage.cache_read_input_tokens ?? 0;
-    total.output += usage.output_tokens ?? 0;
+
+  const perModel = result.modelUsage ? Object.values(result.modelUsage) : [];
+  if (perModel.length > 0) {
+    for (const usage of perModel) {
+      total.freshInput += usage.inputTokens ?? 0;
+      total.cacheCreation += usage.cacheCreationInputTokens ?? 0;
+      total.cacheRead += usage.cacheReadInputTokens ?? 0;
+      total.output += usage.outputTokens ?? 0;
+    }
+    return total;
+  }
+
+  if (result.usage) {
+    total.freshInput += result.usage.input_tokens ?? 0;
+    total.cacheCreation += result.usage.cache_creation_input_tokens ?? 0;
+    total.cacheRead += result.usage.cache_read_input_tokens ?? 0;
+    total.output += result.usage.output_tokens ?? 0;
   }
   return total;
 }
