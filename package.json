@@ -37,7 +37,8 @@
     "test:pack": "vitest run --config vitest.packaging.config.ts",
     "test:bench": "vitest run --config vitest.bench.config.ts",
     "test:bench:smoke": "vitest run --config vitest.bench-smoke.config.ts",
-    "bench:run": "tsx bench/run.ts"
+    "bench:run": "tsx bench/run.ts",
+    "bench:report": "tsx bench/report.ts"
   },
   "dependencies": {
     "@toon-format/toon": "^2.3.0",

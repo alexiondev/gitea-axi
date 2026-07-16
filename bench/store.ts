@@ -2,6 +2,9 @@ import { appendFileSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { CellKey, ResultRecord } from "./result.js";
 
+/** Where accumulated samples are stored when no store root is given. */
+export const DEFAULT_STORE_ROOT = "bench/results";
+
 /** Run `read`, returning `fallback` when the target does not exist yet. */
 function ignoreEnoent<T>(read: () => T, fallback: T): T {
   try {

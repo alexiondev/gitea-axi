@@ -27,17 +27,18 @@ import { DEFAULT_TRIALS, REPORTING_FLOOR, runCells, type RunCellsResult } from "
 import { resolveBenchAccess } from "./seed.js";
 import { detectSelfReviewSupport } from "./self-review.js";
 import { sdkAgentDriver } from "./sdk-driver.js";
-import { createSampleStore } from "./store.js";
+import { createSampleStore, DEFAULT_STORE_ROOT } from "./store.js";
 import { buildScoredSuite } from "./task-suite.js";
+
+// Re-exported so this command's existing importers keep resolving it from here;
+// its single source of truth is now the store, which owns the default root.
+export { DEFAULT_STORE_ROOT };
 
 /** The default turn cap a run is bounded by when not overridden. */
 export const DEFAULT_TURN_CAP = 40;
 
 /** The default wall-clock backstop (ms) a run is bounded by when not overridden. */
 export const DEFAULT_WALL_CLOCK_MS = 300_000;
-
-/** Where accumulated samples are stored when `--store` is not given. */
-export const DEFAULT_STORE_ROOT = "bench/results";
 
 /** Environment variable naming the tea login the benchmark authenticates through. */
 export const LOGIN_ENV = "GITEA_AXI_BENCH_LOGIN";

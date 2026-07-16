@@ -50,8 +50,7 @@ The raw component breakdown is retained on every sample so the data can be re-we
 - `run-loop.ts` — `runCells`, the run loop: it runs one chosen `(arm, task)` cell for a batch of trials (defaulting to five, with a reporting floor of three) by driving `runCell` and the sample store, deciding only how many trials to run and at what trial numbers. Deepening a cell continues numbering past the highest trial it already holds and appends, so a cell's sample size grows across sittings rather than being overwritten. It reimplements no orchestration — provision, run, score, and append stay in `runCell`.
 - `run.ts` — the maintainer-facing run-loop command. `parseRunArgs` is the pure, unit-tested argument seam; `runBenchCommand` is the live boundary that resolves host access, resolves the scored suite against the host's self-review support, selects the task, and drives `runCells`. Invoked via `npm run bench:run` (see below).
 - `aggregate.ts` — the aggregator: the pure seam that renders the accumulated sample store into a readable comparison. `readAllSamples` drains a store into a flat record list; `aggregate` rolls the records up against the task definitions into a `Report` (headline, per-tier and per-token-component breakdowns, and the bonus table); `renderReport` renders that report as stable text. The headline metric, `costEquivalentTokens`, is computed here at render time by weighting the four retained token components by ADR 0014's pricing ratios (fresh input 1×, cache-write 1.25×, cache-read 0.1×, output 5×), so the stored records can be re-weighted without re-running. It reads whatever samples exist and annotates incomplete coverage — cells below the reporting floor (partial) and unsampled cells (missing) — rather than blocking on a complete matrix. A pure function of the records plus the definitions, unit-tested against synthetic append-only sample stores.
-
-The aggregator has no command wrapper yet; a `bench:report` CLI over it is a natural follow-up, in the same shape as `run.ts` is over `run-loop.ts`.
+- `report.ts` — the maintainer-facing reporting command, the counterpart to `run.ts`. `parseReportArgs` is the pure argument seam; `runReportCommand` opens the store, drains it, aggregates against the scored suite and bonus, and prints `renderReport`. Unlike `run.ts` it has no live boundary — it reads only the local store on disk (no credentials, host, or Agent SDK) — so the whole command is deterministic and unit-tested, not smoke-run. Invoked via `npm run bench:report` (see below).
 
 ## Running a cell
 
@@ -66,6 +65,20 @@ Re-running the same cell deepens it — the new trials append rather than overwr
 
 The command is executed with [`tsx`](https://tsx.is) (a devDependency) so the harness's TypeScript runs directly.
 Like the runner smoke tier it drives the live host and the Claude Agent SDK, so a real run needs a configured login, the `gitea-axi` CLI on `PATH`, the Agent SDK installed (`npm install @anthropic-ai/claude-agent-sdk` — an optional peer, declared but not installed by default), and a Claude subscription.
+
+## Reading the results
+
+The reporting command renders whatever has accumulated in the store into the readable comparison — the cost-equivalent-token headline, coverage annotated against the reporting floor, the per-tier and per-token-component breakdowns, and the bonus table:
+
+```
+npm run bench:report
+```
+
+It reads `bench/results/` by default; pass `--store <dir>` to read a different store, and `--help` for the full flag list.
+Incomplete coverage is annotated rather than hidden, so a half-run matrix still renders (unrun arms show an em dash, not a misleading zero).
+
+Unlike `bench:run` this command is offline — it reads only the local store, never the host — so it needs no login, host, or Agent SDK, and is safe to run at any time.
+The `--self-review` / `--no-self-review` flag only selects the bonus capability catalog (whether the approve/request-changes review pair appears there or in the scored suite); the scored coverage is identical either way, so set it to match the host the samples were run on.
 
 ## Tests
 
