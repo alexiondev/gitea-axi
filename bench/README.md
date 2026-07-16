@@ -38,8 +38,9 @@ The raw component breakdown is retained on every sample so the data can be re-we
 - `checker.ts` — the deterministic scorer: the full-state diff for mutation tasks and the answer-match for read tasks, plus the `score` entry point that dispatches on task kind.
 - `seed-plan.ts` — the deterministic ground truth every throwaway repository is seeded to: the fixed labels, the open/closed issue spread across the discriminating dimensions, and the pull requests, as pure data plus `groundTruth(user)`, which realizes it into the `RepoState` the checker scores against.
 - `seed.ts` — the idempotent seeding scripted over the live Gitea API: `resolveBenchAccess` (which reuses gitea-axi's own tea-login credential discovery), `provisionRepo`, and `seedRepo`, reconciling each label, issue, pull request, comment, and review by its natural key so a re-run never duplicates the ground truth.
+- `arm.ts` — the per-arm scaffolding: `basePrompt` (the identical task-agnostic base every arm shares) and `buildArm`, which produces the single `ArmDefinition` the runner consumes — the assembled prompt plus the tool configuration. The gitea-axi arm embeds the bundled Agent Skill, the tea and raw-api arms get a one-line native-discovery pointer, and the gitea-mcp arm runs with the shell disabled and only the MCP server attached (its dispatcher schemas load eagerly). The shell arms' PATH and guard come from `guard.ts`.
 
-Later slices add the arm scaffolding, the single-cell runner, the task suite, the run-loop CLI, and the aggregator.
+Later slices add the single-cell runner, the task suite, the run-loop CLI, and the aggregator.
 
 ## Tests
 
