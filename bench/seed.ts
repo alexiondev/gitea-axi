@@ -73,8 +73,12 @@ async function requireOk(res: Response, method: string, path: string): Promise<R
   return res;
 }
 
-/** Issue a request and require a 2xx, returning the parsed JSON body. */
-async function send<T>(
+/**
+ * Issue a request and require a 2xx, returning the parsed JSON body. Exported so
+ * the post-run snapshot capture (snapshot.ts) reads the live repository through
+ * the same authenticated round-trip the seed writes through.
+ */
+export async function send<T>(
   access: BenchAccess,
   method: string,
   path: string,

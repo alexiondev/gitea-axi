@@ -39,8 +39,14 @@ The raw component breakdown is retained on every sample so the data can be re-we
 - `seed-plan.ts` — the deterministic ground truth every throwaway repository is seeded to: the fixed labels, the open/closed issue spread across the discriminating dimensions, and the pull requests, as pure data plus `groundTruth(user)`, which realizes it into the `RepoState` the checker scores against.
 - `seed.ts` — the idempotent seeding scripted over the live Gitea API: `resolveBenchAccess` (which reuses gitea-axi's own tea-login credential discovery), `provisionRepo`, and `seedRepo`, reconciling each label, issue, pull request, comment, and review by its natural key so a re-run never duplicates the ground truth.
 - `arm.ts` — the per-arm scaffolding: `basePrompt` (the identical task-agnostic base every arm shares) and `buildArm`, which produces the single `ArmDefinition` the runner consumes — the assembled prompt plus the tool configuration. The gitea-axi arm embeds the bundled Agent Skill, the tea and raw-api arms get a one-line native-discovery pointer, and the gitea-mcp arm runs with the shell disabled and only the MCP server attached (its dispatcher schemas load eagerly). The shell arms' PATH and guard come from `guard.ts`.
+- `task.ts` — the runnable `BenchTask` wrapper (natural-language intent, tier, and a scoring spec keyed on the single available user) plus one `SAMPLE_TASK` that exercises the full path; the complete suite is authored in a later slice.
+- `snapshot.ts` — `captureRepoState`, the seed's counterpart: it reads the whole scored surface of a live repository back into the `RepoState` the checker diffs against, normalizing the few fields whose live form differs from the ground truth (notably label colours). A live boundary, so it is exercised by the smoke run rather than mocked.
+- `audit.ts` — `auditTranscript`, the post-run isolation audit: it re-runs the arm's own guard over the executed shell commands and checks channel discipline (a shell arm never reaches MCP tools; the MCP arm never reaches the shell), returning the leaks that flag a trial invalid rather than scored.
+- `runner.ts` — the single-cell runner: `runCell` threads every layer to run one `(arm, task, trial)` cell end to end — provision, seed, run the agent bounded by a turn cap and a wall-clock backstop, audit the transcript, capture and score the post-run state, append the sample, and delete the repository. The live host and the Agent SDK are factored behind the `BenchHost` and `AgentDriver` seams, so the orchestration is unit-tested with fakes while the live wiring is validated by the smoke run.
+- `host.ts` — `liveBenchHost`, the production `BenchHost`: a thin composition of `seed.ts` (provision, seed, delete) and `snapshot.ts` (capture) bound to one set of host credentials.
+- `sdk-driver.ts` — `sdkAgentDriver`, the production `AgentDriver`: it runs one arm through the Claude Agent SDK on the maintainer's subscription, enforcing isolation in-band via the SDK's permission callback (the arm's guard on every Bash command; the shell disabled on the MCP arm) and reporting the four token components (folding in the auxiliary small model), the turn count, the imputed cost, the transcript, and the final report. The SDK is loaded through a computed dynamic import so it is an optional peer needed only for live runs.
 
-Later slices add the single-cell runner, the task suite, the run-loop CLI, and the aggregator.
+Later slices add the task suite, the run-loop CLI, and the aggregator.
 
 ## Tests
 
@@ -52,11 +58,13 @@ npm run test:bench
 
 They are kept out of the main fast tier so harness code never counts against the `src/` coverage thresholds.
 
-Seed provisioning is the one boundary validated live rather than by mocks, since its value is the real Gitea API interaction.
-Its smoke run is a separate tier that talks to a real host — the maintainer's own, discovered through the tea-login credential path — and skips cleanly when no host is configured:
+Seed provisioning and single-cell run orchestration are the two boundaries validated live rather than by mocks, since their value is the real Gitea API interaction and the real model run.
+The smoke tier talks to a real host — the maintainer's own, discovered through the tea-login credential path — and skips cleanly when no host is configured:
 
 ```
 GITEA_AXI_BENCH_LOGIN=<tea-login-name> npm run test:bench:smoke
 ```
 
 With `GITEA_AXI_BENCH_LOGIN` unset the smoke tier skips (a pass), matching the end-to-end tier's behavior when no live instance is configured.
+The runner smoke additionally requires the Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`, an optional peer of the harness, needed only for live runs) and the `gitea-axi` CLI on `PATH`; it skips when the SDK is not installed and needs a Claude subscription to run for real.
+The post-run transcript audit is what validates run orchestration: a run in which a foreign tool was reached is flagged invalid rather than scored.
