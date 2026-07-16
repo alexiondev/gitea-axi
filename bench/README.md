@@ -33,8 +33,9 @@ The raw component breakdown is retained on every sample so the data can be re-we
 
 - `result.ts` — the immutable result-record shape and its tags (arm, task, tier, trial, timestamp).
 - `store.ts` — the append-only, per-cell sample store that accumulates result records.
+- `guard.ts` — the authoritative tool-isolation guard plus the curated per-arm bin directory that backs it.
 
-Later slices add the tool-isolation guard, the seed provisioning, the arm scaffolding, the single-cell runner, the task suite, the run-loop CLI, and the aggregator.
+Later slices add the seed provisioning, the arm scaffolding, the single-cell runner, the task suite, the run-loop CLI, and the aggregator.
 
 ## Tests
 
