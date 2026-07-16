@@ -36,8 +36,10 @@ The raw component breakdown is retained on every sample so the data can be re-we
 - `guard.ts` — the authoritative tool-isolation guard plus the curated per-arm bin directory that backs it.
 - `scoring-spec.ts` — the scoring-spec contract: a task's expected end state (mutation) or required answer facts (read), consumed by the checker and produced by the runner and task suite.
 - `checker.ts` — the deterministic scorer: the full-state diff for mutation tasks and the answer-match for read tasks, plus the `score` entry point that dispatches on task kind.
+- `seed-plan.ts` — the deterministic ground truth every throwaway repository is seeded to: the fixed labels, the open/closed issue spread across the discriminating dimensions, and the pull requests, as pure data plus `groundTruth(user)`, which realizes it into the `RepoState` the checker scores against.
+- `seed.ts` — the idempotent seeding scripted over the live Gitea API: `resolveBenchAccess` (which reuses gitea-axi's own tea-login credential discovery), `provisionRepo`, and `seedRepo`, reconciling each label, issue, pull request, comment, and review by its natural key so a re-run never duplicates the ground truth.
 
-Later slices add the seed provisioning, the arm scaffolding, the single-cell runner, the task suite, the run-loop CLI, and the aggregator.
+Later slices add the arm scaffolding, the single-cell runner, the task suite, the run-loop CLI, and the aggregator.
 
 ## Tests
 
@@ -48,3 +50,12 @@ npm run test:bench
 ```
 
 They are kept out of the main fast tier so harness code never counts against the `src/` coverage thresholds.
+
+Seed provisioning is the one boundary validated live rather than by mocks, since its value is the real Gitea API interaction.
+Its smoke run is a separate tier that talks to a real host — the maintainer's own, discovered through the tea-login credential path — and skips cleanly when no host is configured:
+
+```
+GITEA_AXI_BENCH_LOGIN=<tea-login-name> npm run test:bench:smoke
+```
+
+With `GITEA_AXI_BENCH_LOGIN` unset the smoke tier skips (a pass), matching the end-to-end tier's behavior when no live instance is configured.

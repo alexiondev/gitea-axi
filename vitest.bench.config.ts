@@ -8,6 +8,9 @@ export default defineConfig({
     // source. It runs on its own via `test:bench` and is kept out of the main
     // fast tier so bench code never counts against src coverage thresholds.
     include: ["bench/**/*.test.ts"],
+    // The live seed smoke run is its own tier (vitest.bench-smoke.config.ts); it
+    // talks to a real Gitea host, so it stays out of this deterministic tier.
+    exclude: ["bench/**/*.smoke.test.ts", "**/node_modules/**"],
     passWithNoTests: true,
   },
 });

@@ -96,7 +96,7 @@ function matchLoginsByHost(logins: TeaLogin[], host: string): TeaLogin[] {
   });
 }
 
-function selectLogin(
+export function selectLogin(
   logins: TeaLogin[],
   loginName: string | undefined,
   remoteHost: string | undefined,
