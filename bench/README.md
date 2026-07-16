@@ -34,6 +34,8 @@ The raw component breakdown is retained on every sample so the data can be re-we
 - `result.ts` — the immutable result-record shape and its tags (arm, task, tier, trial, timestamp).
 - `store.ts` — the append-only, per-cell sample store that accumulates result records.
 - `guard.ts` — the authoritative tool-isolation guard plus the curated per-arm bin directory that backs it.
+- `scoring-spec.ts` — the scoring-spec contract: a task's expected end state (mutation) or required answer facts (read), consumed by the checker and produced by the runner and task suite.
+- `checker.ts` — the deterministic scorer: the full-state diff for mutation tasks and the answer-match for read tasks, plus the `score` entry point that dispatches on task kind.
 
 Later slices add the seed provisioning, the arm scaffolding, the single-cell runner, the task suite, the run-loop CLI, and the aggregator.
 
