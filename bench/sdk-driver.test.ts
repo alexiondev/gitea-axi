@@ -1,5 +1,7 @@
+import { readdirSync, rmSync, statSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { sumTokens } from "./sdk-driver.js";
+import { createAgentWorkdir, sumTokens } from "./sdk-driver.js";
 import type { SdkResultMessage } from "./sdk-driver.js";
 
 describe("sumTokens", () => {
@@ -85,5 +87,33 @@ describe("sumTokens", () => {
       cacheRead: 20000,
       output: 90,
     });
+  });
+});
+
+describe("createAgentWorkdir", () => {
+  // Behavior: each agent run must operate in a fresh, empty directory located
+  // OUTSIDE the harness's own checkout. This isolation is what stops an agent
+  // that forgets an explicit `-R OWNER/NAME` from having its `gitea-axi`/`tea`
+  // tools silently default their target repo to the harness's own git checkout:
+  // a directory that is empty (no `.git`) and outside the current checkout gives
+  // those tools nothing local to resolve.
+  //
+  // The three assertions are independent anti-bug properties drawn directly from
+  // the requirement, not recomputed from the implementation:
+  //   1. the path exists and is a directory,
+  //   2. it is empty (zero entries — in particular no `.git`),
+  //   3. it sits outside the current working directory (relative path escapes
+  //      upward with "..").
+  it("returns a fresh, empty directory located outside the current checkout", () => {
+    const dir = createAgentWorkdir();
+    try {
+      expect(statSync(dir).isDirectory()).toBe(true);
+      expect(readdirSync(dir)).toHaveLength(0);
+      expect(path.relative(process.cwd(), dir).startsWith("..")).toBe(true);
+    } finally {
+      // Safe: `dir` is a fresh throwaway temp dir we just received from
+      // createAgentWorkdir(); never a delete of cwd or any pre-existing path.
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

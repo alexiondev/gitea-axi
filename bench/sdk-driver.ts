@@ -17,6 +17,9 @@
 // recorded in the transcript, so the runner's post-run audit sees what actually
 // executed — a blocked attempt is realistic wasted effort, not a leak.
 
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ArmDefinition } from "./arm.js";
 import { foreignToolReason, type ToolUse } from "./audit.js";
 import type { TokenComponents } from "./result.js";
@@ -104,6 +107,8 @@ interface SdkQueryOptions {
   abortController: AbortController;
   canUseTool: (toolName: string, input: Record<string, unknown>) => Promise<SdkPermissionResult>;
   settingSources: string[];
+  /** The agent's shell working directory: a fresh empty dir outside any checkout. */
+  cwd: string;
   env?: Record<string, string | undefined>;
   mcpServers?: Record<string, SdkStdioServer>;
   disallowedTools?: string[];
@@ -197,28 +202,45 @@ export function sdkAgentDriver(config: SdkDriverConfig = {}): AgentDriver {
         return { behavior: "allow", updatedInput: toolInput };
       };
 
-      const options = buildOptions(input.arm, model, input.turnCap, controller, canUseTool);
+      const workdir = createAgentWorkdir();
+      try {
+        const options = buildOptions(input.arm, model, input.turnCap, controller, canUseTool, workdir);
 
-      let result: SdkResultMessage | undefined;
-      for await (const message of query({ prompt: input.intent, options })) {
-        if (message.type === "result") {
-          result = message as SdkResultMessage;
+        let result: SdkResultMessage | undefined;
+        for await (const message of query({ prompt: input.intent, options })) {
+          if (message.type === "result") {
+            result = message as SdkResultMessage;
+          }
         }
-      }
-      if (result === undefined) {
-        throw new Error("the Agent SDK produced no result message");
-      }
+        if (result === undefined) {
+          throw new Error("the Agent SDK produced no result message");
+        }
 
-      return {
-        tokens: sumTokens(result),
-        turns: result.num_turns ?? 0,
-        imputedCostUsd: result.total_cost_usd ?? 0,
-        transcript,
-        finalReport: result.result ?? "",
-        stoppedByTurnCap: result.subtype === "error_max_turns",
-      };
+        return {
+          tokens: sumTokens(result),
+          turns: result.num_turns ?? 0,
+          imputedCostUsd: result.total_cost_usd ?? 0,
+          transcript,
+          finalReport: result.result ?? "",
+          stoppedByTurnCap: result.subtype === "error_max_turns",
+        };
+      } finally {
+        rmSync(workdir, { recursive: true, force: true });
+      }
     },
   };
+}
+
+/**
+ * Create a fresh, empty working directory for one agent run, outside any git
+ * checkout. The agent's shell runs here so a shell tool that defaults its target
+ * repository from the local checkout (gitea-axi, tea) cannot silently resolve the
+ * harness's own repository when the agent omits an explicit `-R`; with no ambient
+ * checkout the agent must target the repository named in its prompt. The caller
+ * deletes it when the run ends.
+ */
+export function createAgentWorkdir(): string {
+  return mkdtempSync(join(tmpdir(), "bench-agent-cwd-"));
 }
 
 /** Assemble the SDK query options for an arm's tool configuration. */
@@ -228,6 +250,7 @@ function buildOptions(
   turnCap: number,
   controller: AbortController,
   canUseTool: SdkQueryOptions["canUseTool"],
+  cwd: string,
 ): SdkQueryOptions {
   const options: SdkQueryOptions = {
     model,
@@ -241,6 +264,9 @@ function buildOptions(
     // Start from a clean slate: no user/project settings leak tools or config
     // into the measured run.
     settingSources: [],
+    // Run outside any checkout so a forgotten -R cannot resolve the harness's own
+    // repository instead of the seeded throwaway (see createAgentWorkdir).
+    cwd,
   };
   if (arm.shell !== null) {
     // Lead the agent's PATH with the arm's curated bin directory so only its one
