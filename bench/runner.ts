@@ -14,7 +14,7 @@
 import { buildArm, type ArmDefinition, type BuildArmOptions, type SharedContext } from "./arm.js";
 import { auditTranscript, type ToolUse } from "./audit.js";
 import { score } from "./checker.js";
-import type { Arm, Outcome, ResultRecord, TokenComponents } from "./result.js";
+import type { Arm, Outcome, ResultRecord, TokenComponents, TranscriptEntry } from "./result.js";
 import type { RepoState, ScoringSpec } from "./scoring-spec.js";
 import type { BenchAccess, RepoCoords } from "./seed.js";
 import type { SampleStore } from "./store.js";
@@ -151,7 +151,7 @@ export async function runCell(input: RunCellInput): Promise<CellOutcome> {
     if (result.kind === "hung") {
       return recorded(
         store,
-        makeRecord(input, NO_TOKENS, 0, 0, durationMs, { pass: false, failure: "hung" }, undefined, clock),
+        makeRecord(input, NO_TOKENS, 0, 0, durationMs, { pass: false, failure: "hung" }, undefined, undefined, clock),
       );
     }
 
@@ -176,7 +176,7 @@ export async function runCell(input: RunCellInput): Promise<CellOutcome> {
 
     return recorded(
       store,
-      makeRecord(input, run.tokens, run.turns, run.imputedCostUsd, durationMs, outcome, report, clock),
+      makeRecord(input, run.tokens, run.turns, run.imputedCostUsd, durationMs, outcome, report, run.transcript, clock),
     );
   } finally {
     await host.delete(coords);
@@ -241,6 +241,7 @@ function makeRecord(
   durationMs: number,
   outcome: Outcome,
   report: string | undefined,
+  transcript: TranscriptEntry[] | undefined,
   clock: RunnerClock,
 ): ResultRecord {
   return {
@@ -257,6 +258,9 @@ function makeRecord(
     // Absent for mutation runs and runs with no completed report (hung); JSON
     // serialization drops the key when undefined.
     ...(report !== undefined ? { report } : {}),
+    // Absent only for a hung run, which produced no transcript; JSON
+    // serialization drops the key when undefined.
+    ...(transcript !== undefined ? { transcript } : {}),
   };
 }
 

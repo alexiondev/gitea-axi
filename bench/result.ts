@@ -46,6 +46,19 @@ export type FailureTag = "incorrect" | "confused" | "hung";
 export type Outcome = { pass: true } | { pass: false; failure: FailureTag };
 
 /**
+ * One tool invocation as it is recorded in a run's transcript, in the order it
+ * executed. This is the canonical shape the harness both audits for isolation
+ * (see audit.ts, whose `ToolUse` aliases this) and persists on the record for
+ * diagnosis. A `shell` entry keeps the exact command line the agent ran; an `mcp`
+ * entry names the server and tool it called; `other` names a built-in tool that
+ * reaches no Gitea channel.
+ */
+export type TranscriptEntry =
+  | { kind: "shell"; command: string }
+  | { kind: "mcp"; server: string; tool: string }
+  | { kind: "other"; name: string };
+
+/**
  * One completed `(arm, task, trial)` run. Carries the metrics the headline and
  * supporting views are computed from, plus the tags those views group by.
  */
@@ -81,6 +94,15 @@ export interface ResultRecord {
    * scored by diffing repository state and have no agent report to record.
    */
   report?: string;
+
+  /**
+   * The ordered transcript of tool invocations the run made, retained on every
+   * scored run so its turn cost is diagnosable directly from the record — the
+   * exact command sequence, which is how an arm's turn count (the dominant driver
+   * of cache-read tokens) is explained. Absent only for a hung run, which
+   * produced no completed transcript to record.
+   */
+  transcript?: TranscriptEntry[];
 }
 
 /**

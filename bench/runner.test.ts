@@ -241,6 +241,12 @@ describe("runCell", () => {
     expect(sample.imputedCostUsd).toBe(DRIVER_COST);
     expect(sample.outcome).toEqual({ pass: true });
 
+    // The recorded sample carries the run's tool transcript — the exact ordered
+    // sequence of tool invocations the driver reported — so the turn's cost is
+    // diagnosable directly from the record. The expected value is the literal the
+    // fake driver planted, deep-equal and in order, not recomputed from runner.ts.
+    expect(sample.transcript).toEqual([{ kind: "mcp", server: "gitea-mcp", tool: "edit_issue" }]);
+
     // The sample carries the run's wall-clock duration; a completed run takes
     // non-negative time.
     expect(typeof sample.durationMs).toBe("number");

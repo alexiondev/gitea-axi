@@ -12,17 +12,17 @@
 // runner (runner.ts) drives the run and feeds the transcript here.
 
 import type { ArmDefinition } from "./arm.js";
+import type { TranscriptEntry } from "./result.js";
 
 /**
  * One tool invocation recorded in the agent's transcript, reduced to what the
  * isolation audit needs. `shell` is a proposed shell command; `mcp` is a call to
  * an attached MCP server's tool; `other` is a built-in, non-Gitea-reaching tool
- * (file read/edit and the like) that carries no isolation risk.
+ * (file read/edit and the like) that carries no isolation risk. This is the same
+ * shape the record persists ({@link TranscriptEntry}); the audit and the record
+ * share one type so they cannot drift.
  */
-export type ToolUse =
-  | { kind: "shell"; command: string }
-  | { kind: "mcp"; server: string; tool: string }
-  | { kind: "other"; name: string };
+export type ToolUse = TranscriptEntry;
 
 /**
  * The audit's verdict. On a leak it carries a human-readable reason per foreign
