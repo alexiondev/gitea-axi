@@ -16,7 +16,17 @@ Reach for `gitea-axi` whenever a task touches a Gitea repository's issues, pull 
 - **Over raw Gitea API calls:** it handles auth, pagination, name-to-ID resolution, and review-decision aggregation for you, so you do not hand-roll HTTP.
 - **Over improvised `git`:** for anything about issues or pull requests as entities (state, reviews, labels, comments) rather than local commits and branches.
 
-Run it inside a Gitea checkout, or pass `-R OWNER/NAME` (and `--login <name>`) to target a repository explicitly.
+## Targeting and authentication
+
+Every command resolves two things: which repository to act on, and which credentials to authenticate with.
+Get both right on the first call — they are the usual reason a command fails and has to be retried.
+
+- **Repository.** Inside a Gitea checkout it is taken from the `origin` remote automatically.
+  Outside a checkout you must name it: pass `-R OWNER/NAME` on every command (or set `GITEA_AXI_REPO=OWNER/NAME` once for the session).
+- **Credentials.** When the environment is pre-configured — `GITEA_AXI_TOKEN` together with `GITEA_AXI_API_URL` — authentication is automatic and you need nothing more.
+  Otherwise credentials come from a `tea` login: pass `--login <name>` (or set `GITEA_AXI_LOGIN=<name>`) unless the checkout's remote already selects one.
+
+So outside a checkout with the token in the environment, `gitea-axi <command> -R OWNER/NAME …` is all you need; do not go hunting for a config file or a login profile.
 
 ## Command groups
 

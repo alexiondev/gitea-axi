@@ -112,6 +112,32 @@ describe("buildArm", () => {
     expect(envValues).toContain("s3cr3t-token");
   });
 
+  // Behavior: the gitea-axi arm's shell is handed a credential environment
+  // carrying the host and token from the shared access, so its tool is
+  // pre-authenticated without the agent having to discover credentials
+  // (benchmark-harness spec, "Scaffolding"). The access here is built from
+  // independent literals; shell.env must deep-equal exactly the two facts echoed
+  // back under their env-var names (host→GITEA_AXI_API_URL, token→GITEA_AXI_TOKEN),
+  // and nothing else. The keys and mapping are fixed by gitea-axi's own env
+  // contract, not recomputed from arm.ts.
+  it("gives the gitea-axi arm's shell a credential env with the shared host URL and token", () => {
+    const preAuthed: SharedContext = {
+      coords: { owner: "acme", repo: "bench-xyz" },
+      access: { apiUrl: "https://git.example.test", token: "tok-abc123" },
+    };
+
+    const definition = buildArm("gitea-axi", preAuthed, { binRoot, locate });
+
+    const shell = definition.shell;
+    expect(shell).not.toBeNull();
+    if (shell === null) return;
+
+    expect(shell.env).toEqual({
+      GITEA_AXI_API_URL: "https://git.example.test",
+      GITEA_AXI_TOKEN: "tok-abc123",
+    });
+  });
+
   // Behavior: each non-MCP arm's tool/PATH configuration comes from the guard and
   // exposes only that arm's allowed binary (benchmark-harness spec, "Tool
   // isolation" / ADR 0016). The (arm, binary) pairs are independent literals —

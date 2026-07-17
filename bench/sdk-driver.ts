@@ -271,7 +271,10 @@ function buildOptions(
   if (arm.shell !== null) {
     // Lead the agent's PATH with the arm's curated bin directory so only its one
     // allowed binary resolves by name; the guard on canUseTool is the authority.
-    options.env = { ...process.env, PATH: arm.shell.path };
+    // Layer the arm's credential env underneath so its tool is pre-authenticated
+    // the way its product is really configured, symmetric to the gitea-mcp
+    // server's env (see ArmShell.env); PATH stays last so it is never overridden.
+    options.env = { ...process.env, ...arm.shell.env, PATH: arm.shell.path };
   }
   if (arm.mcp !== null) {
     options.mcpServers = { [arm.arm]: { type: "stdio", ...arm.mcp.server } };

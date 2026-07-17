@@ -40,6 +40,17 @@ export interface ArmShell {
   path: string;
   /** The authoritative tool-isolation guard, bound to this arm. */
   guard: (command: string) => GuardDecision;
+  /**
+   * Credential environment the arm's tool is pre-configured with, merged into
+   * the agent's shell environment on top of {@link path}. This keeps the arms
+   * symmetric on authentication: every arm is handed its host and token the way
+   * its product is really configured, so none pays a turn tax rediscovering how
+   * to authenticate. The gitea-mcp arm gets the equivalent through its MCP
+   * server's env; raw-api uses the token stated in its prompt directly; the
+   * gitea-axi arm is configured through its own env interface here. Empty for an
+   * arm that needs no ambient credentials.
+   */
+  env: Record<string, string>;
 }
 
 /**
@@ -172,7 +183,7 @@ function mcpAttachment(context: SharedContext): ArmMcp {
  * gitea-mcp arm has no shell binary (`provisionArmBin` exposes nothing for it),
  * so this returns null there and the arm reaches Gitea through its MCP tools.
  */
-function buildShell(arm: Arm, options: BuildArmOptions): ArmShell | null {
+function buildShell(arm: Arm, context: SharedContext, options: BuildArmOptions): ArmShell | null {
   if (arm === "gitea-mcp") {
     return null;
   }
@@ -183,7 +194,28 @@ function buildShell(arm: Arm, options: BuildArmOptions): ArmShell | null {
     binDir,
     path: ambient === "" ? binDir : `${binDir}${delimiter}${ambient}`,
     guard: (command) => guardCommand(arm, command),
+    env: shellEnv(arm, context),
   };
+}
+
+/**
+ * The credential environment a shell arm's tool is pre-configured with. The
+ * gitea-axi arm is handed its host and token through its own env interface
+ * (`GITEA_AXI_API_URL` / `GITEA_AXI_TOKEN`), the symmetric counterpart to the
+ * gitea-mcp arm's server env: both name the same host and token, and both leave
+ * the agent to name the repository per call (gitea-axi via `-R`, gitea-mcp via
+ * each tool's arguments). The tea and raw-api arms need no ambient credentials —
+ * raw-api uses the token stated in its prompt directly in each request, and tea
+ * resolves its own login store — so their env is empty.
+ */
+function shellEnv(arm: Arm, context: SharedContext): Record<string, string> {
+  if (arm === "gitea-axi") {
+    return {
+      GITEA_AXI_API_URL: context.access.apiUrl,
+      GITEA_AXI_TOKEN: context.access.token,
+    };
+  }
+  return {};
 }
 
 /** Assemble the single arm definition the runner consumes for the given arm. */
@@ -192,7 +224,7 @@ export function buildArm(arm: Arm, context: SharedContext, options: BuildArmOpti
   return {
     arm,
     systemPrompt,
-    shell: buildShell(arm, options),
+    shell: buildShell(arm, context, options),
     mcp: arm === "gitea-mcp" ? mcpAttachment(context) : null,
   };
 }
