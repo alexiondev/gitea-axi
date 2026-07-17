@@ -15,7 +15,7 @@ import { buildArm, type ArmDefinition, type BuildArmOptions, type SharedContext 
 import { auditTranscript, type ToolUse } from "./audit.js";
 import { score } from "./checker.js";
 import type { Arm, Outcome, ResultRecord, TokenComponents } from "./result.js";
-import type { RepoState } from "./scoring-spec.js";
+import type { RepoState, ScoringSpec } from "./scoring-spec.js";
 import type { BenchAccess, RepoCoords } from "./seed.js";
 import type { SampleStore } from "./store.js";
 import type { BenchTask } from "./task.js";
@@ -149,7 +149,10 @@ export async function runCell(input: RunCellInput): Promise<CellOutcome> {
     // A hung run produced no completed transcript to audit or score; record it
     // as a failure with no measured consumption.
     if (result.kind === "hung") {
-      return recorded(store, makeRecord(input, NO_TOKENS, 0, 0, durationMs, { pass: false, failure: "hung" }, clock));
+      return recorded(
+        store,
+        makeRecord(input, NO_TOKENS, 0, 0, durationMs, { pass: false, failure: "hung" }, undefined, clock),
+      );
     }
 
     const run = result.run;
@@ -161,13 +164,19 @@ export async function runCell(input: RunCellInput): Promise<CellOutcome> {
       return { kind: "invalid", leaks: audit.leaks };
     }
 
+    const spec = task.scoringSpec(coords.owner);
     const outcome = run.stoppedByTurnCap
       ? ({ pass: false, failure: "confused" } as const)
-      : await scoreRun(host, coords, task, run);
+      : await scoreRun(host, coords, spec, run);
+
+    // Retain the agent's final report for read tasks so a failed read is
+    // diagnosable directly from the record; mutation tasks are scored by diffing
+    // repository state and have no agent report to record.
+    const report = spec.kind === "read" ? run.finalReport : undefined;
 
     return recorded(
       store,
-      makeRecord(input, run.tokens, run.turns, run.imputedCostUsd, durationMs, outcome, clock),
+      makeRecord(input, run.tokens, run.turns, run.imputedCostUsd, durationMs, outcome, report, clock),
     );
   } finally {
     await host.delete(coords);
@@ -214,8 +223,7 @@ async function runBounded(
  * final report against the required facts for a read. A pass is a pass; anything
  * the checker rejects is an incorrect failure.
  */
-async function scoreRun(host: BenchHost, coords: RepoCoords, task: BenchTask, run: AgentRun): Promise<Outcome> {
-  const spec = task.scoringSpec(coords.owner);
+async function scoreRun(host: BenchHost, coords: RepoCoords, spec: ScoringSpec, run: AgentRun): Promise<Outcome> {
   const snapshot = await host.capture(coords);
   const check =
     spec.kind === "mutation"
@@ -232,6 +240,7 @@ function makeRecord(
   imputedCostUsd: number,
   durationMs: number,
   outcome: Outcome,
+  report: string | undefined,
   clock: RunnerClock,
 ): ResultRecord {
   return {
@@ -245,6 +254,9 @@ function makeRecord(
     durationMs,
     imputedCostUsd,
     outcome,
+    // Absent for mutation runs and runs with no completed report (hung); JSON
+    // serialization drops the key when undefined.
+    ...(report !== undefined ? { report } : {}),
   };
 }
 

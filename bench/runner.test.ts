@@ -6,6 +6,7 @@ import type { RepoState } from "./scoring-spec.js";
 import type { BenchAccess, RepoCoords } from "./seed.js";
 import { groundTruth } from "./seed-plan.js";
 import { createSampleStore } from "./store.js";
+import type { BenchTask } from "./task.js";
 import { SAMPLE_TASK } from "./task.js";
 import type { AgentDriver, BenchHost } from "./runner.js";
 import { runCell } from "./runner.js";
@@ -396,5 +397,111 @@ describe("runCell", () => {
     expect(sample).toBeDefined();
     if (sample === undefined) return;
     expect(sample.outcome).toEqual({ pass: false, failure: "incorrect" });
+  });
+
+  // Behavior: a completed read cell produces a record whose report is the agent's
+  // final report (benchmark-harness spec, record-assembly seam). A read task is
+  // scored by matching the agent's final report against required facts; the
+  // recorded ResultRecord must carry that final report in its `report` field so a
+  // read is diagnosable from the record alone. Here an inline read task's fact is
+  // satisfied by the driver's finalReport (it contains "5 open"), so the cell
+  // completes as a pass; the recorded sample's `report` must equal the exact
+  // planted finalReport literal — an independent literal, read back through the
+  // store, not recomputed from runner.ts.
+  it("records the agent's final report on a completed read cell", async () => {
+    const READ_TASK: BenchTask = {
+      id: "count-open-issues",
+      tier: "read",
+      intent: "How many issues are open?",
+      scoringSpec: () => ({
+        kind: "read",
+        facts: [{ description: "open-issue count", anyOf: ["5 open"] }],
+      }),
+    };
+
+    // The independent literal we plant as the driver's final report. It contains
+    // the fact's rendering ("5 open"), so the read scorer scores it a pass.
+    const FINAL_REPORT = "There are 5 open issues.";
+
+    const readDriver: AgentDriver = {
+      async run() {
+        return {
+          tokens: { freshInput: 50, cacheCreation: 0, cacheRead: 0, output: 10 },
+          turns: 2,
+          imputedCostUsd: 0.03,
+          transcript: [{ kind: "mcp", server: "gitea-mcp", tool: "list_repo_issues" }],
+          finalReport: FINAL_REPORT,
+          stoppedByTurnCap: false,
+        };
+      },
+    };
+
+    const { host } = createFakeHost();
+    const store = createSampleStore(storeRoot);
+
+    const outcome = await runCell({
+      arm: "gitea-mcp",
+      task: READ_TASK,
+      trial: 1,
+      access: ACCESS,
+      host,
+      driver: readDriver,
+      store,
+      bounds: { turnCap: 10, wallClockMs: 60_000 },
+      build: { binRoot },
+    });
+
+    expect(outcome.kind).toBe("recorded");
+    if (outcome.kind !== "recorded") return;
+
+    const samples = store.read({ arm: "gitea-mcp", taskId: READ_TASK.id });
+    expect(samples).toHaveLength(1);
+    const [sample] = samples;
+    expect(sample).toBeDefined();
+    if (sample === undefined) return;
+
+    // A completed read cell: the checker scored the final report a pass.
+    expect(sample.outcome).toEqual({ pass: true });
+    // The record carries the agent's final report verbatim.
+    expect(sample.report).toBe(FINAL_REPORT);
+  });
+
+  // Behavior: a completed mutation cell produces a record WITHOUT an agent report
+  // (benchmark-harness spec, record-assembly seam). A mutation task is scored by
+  // diffing repository state, not by reading the agent's words, so the recorded
+  // ResultRecord must carry no `report` field at all — absent, not present-but-
+  // undefined. SAMPLE_TASK is a mutation task; paired with the passing fake host
+  // and driver it drives a completed mutation PASS. The absence is the independent
+  // source of truth (the acceptance criterion), read back through the store after
+  // the JSON round-trip so an absent field is genuinely not a key.
+  it("records no agent report on a completed mutation cell", async () => {
+    const { host } = createFakeHost();
+    const store = createSampleStore(storeRoot);
+
+    const outcome = await runCell({
+      arm: "gitea-mcp",
+      task: SAMPLE_TASK,
+      trial: 1,
+      access: ACCESS,
+      host,
+      driver,
+      store,
+      bounds: { turnCap: 10, wallClockMs: 60_000 },
+      build: { binRoot },
+    });
+
+    expect(outcome.kind).toBe("recorded");
+    if (outcome.kind !== "recorded") return;
+
+    const samples = store.read({ arm: "gitea-mcp", taskId: SAMPLE_TASK.id });
+    expect(samples).toHaveLength(1);
+    const [sample] = samples;
+    expect(sample).toBeDefined();
+    if (sample === undefined) return;
+
+    // A completed mutation cell: the state diff scored a pass.
+    expect(sample.outcome).toEqual({ pass: true });
+    // A mutation record carries no agent report — the key is absent entirely.
+    expect(sample).not.toHaveProperty("report");
   });
 });

@@ -72,6 +72,15 @@ export interface ResultRecord {
 
   /** Pass/fail outcome with a failure tag. */
   outcome: Outcome;
+
+  /**
+   * The agent's final report, retained for read tasks so a failed read is
+   * diagnosable directly from the record — the exact text the agent submitted,
+   * distinguishing a wrong answer from a right one phrased in words the checker's
+   * accepted-phrasing list did not match. Absent for mutation tasks, which are
+   * scored by diffing repository state and have no agent report to record.
+   */
+  report?: string;
 }
 
 /**

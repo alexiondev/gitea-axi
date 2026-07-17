@@ -102,4 +102,24 @@ describe("SampleStore", () => {
     secondRun.append(second);
     expect(secondRun.read(cell)).toEqual([first, second]);
   });
+
+  // Behavior: the store round-trips a report-bearing record without any change to
+  // the store itself. A read task's record carries the agent's final report in the
+  // `report` field; appending it and reading it back must return it equal, `report`
+  // and all, proving the store persists the field with no store change. The planted
+  // report string is an independent literal, not anything production code computes.
+  it("round-trips a record carrying a report field, preserving it unchanged", () => {
+    const store = createSampleStore(root);
+    const report = "There are 5 open issues in the repository.";
+    const record = sample({ tier: "read", report });
+
+    store.append(record);
+
+    const readBack = store.read({ arm: record.arm, taskId: record.taskId });
+    expect(readBack).toEqual([record]);
+    const [only] = readBack;
+    expect(only).toBeDefined();
+    if (only === undefined) return;
+    expect(only.report).toBe(report);
+  });
 });
