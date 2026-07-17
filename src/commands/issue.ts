@@ -222,7 +222,10 @@ Show a single issue. Pull request numbers are rejected — use \`pr view\` inste
 flags:
   --comments   Render every comment in full (bodies truncated at 800 chars)
   --full       Suppress all truncation of the issue body and comment bodies
+  --fields <a,b,c>  Append extra fields: assignees, closedAt, milestone, updatedAt, url
   --help       Show this help
+
+Labels are shown by default; use --fields to add assignees, milestone, and more.
 
 global flags:
   -R, --repo <OWNER/NAME>     Override the repository detected from the git origin remote
@@ -479,19 +482,32 @@ const ISSUE_VIEW_FIELDS: FieldDef<Issue>[] = [
   pluck("number"),
   pluck("title"),
   lowercased("state"),
+  joined("labels", "labels", "name"),
   pluck("author", "user.login"),
   relativeTimeField("created", "created_at"),
 ];
+
+// Appended to the default view fields on request via `--fields`, never replacing
+// them. Labels and body are shown by default, so they are not offered here.
+const ISSUE_VIEW_EXTRA_FIELDS: Record<string, FieldDef<Issue>> = {
+  assignees: joined("assignees", "assignees", "login"),
+  closedAt: relativeTimeField("closedAt", "closed_at"),
+  milestone: pluck("milestone", "milestone.title"),
+  updatedAt: relativeTimeField("updatedAt", "updated_at"),
+  url: pluck("url", "html_url"),
+};
 
 interface IssueDetailOptions {
   host: string;
   full: boolean;
   withComments: boolean;
   now: Date;
+  /** Extra fields selected via `--fields`, appended after the defaults. */
+  extraFields: FieldDef<Issue>[];
 }
 
 function buildIssueDetail(issue: Issue, options: IssueDetailOptions): Record<string, unknown> {
-  const row = extractRow(issue, ISSUE_VIEW_FIELDS, {
+  const row = extractRow(issue, [...ISSUE_VIEW_FIELDS, ...options.extraFields], {
     now: options.now,
     host: options.host,
     full: options.full,
@@ -539,12 +555,21 @@ async function issueView(deps: CliDeps, args: string[]): Promise<string> {
   }
   const { flags, positionals } = parseFlags(
     args,
-    { "--comments": { takesValue: false }, "--full": { takesValue: false } },
+    {
+      "--comments": { takesValue: false },
+      "--full": { takesValue: false },
+      "--fields": { takesValue: true },
+    },
     "issue view",
   );
   const number = parsePositionalNumber(positionals, "issue view", "issue");
   const full = flags["--full"] === true;
   const withComments = flags["--comments"] === true;
+  const extraFields = selectExtraFields(
+    flagValue(flags, "--fields"),
+    ISSUE_VIEW_EXTRA_FIELDS,
+    "issue view",
+  );
 
   const context = await resolveRepoContext(deps);
   const api = createClient(context);
@@ -557,7 +582,7 @@ async function issueView(deps: CliDeps, args: string[]): Promise<string> {
   }
 
   const now = new Date();
-  const item = buildIssueDetail(issue, { host: context.host, full, withComments, now });
+  const item = buildIssueDetail(issue, { host: context.host, full, withComments, now, extraFields });
 
   const blocks: DetailBlock[] = [];
   if (withComments) {

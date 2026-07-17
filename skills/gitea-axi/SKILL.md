@@ -33,8 +33,11 @@ So outside a checkout with the token in the environment, `gitea-axi <command> -R
 - `issue` — list, view, create, comment on, edit, close/reopen, pin, and link issues.
 - `pr` — create, view, comment on, edit, review, merge, check out, diff, and inspect the checks of pull requests.
 - `label` — list, create, edit, and delete labels.
-- `search` — full-text search across issues and pull requests.
+- `search` — full-text search; it takes a subcommand, so search issues with `search issues "<query>"` and pull requests with `search prs "<query>"` (a bare `search "<query>"` is not valid).
 - `setup` — install this skill (`setup`) and, opt-in, the SessionStart dashboard hook (`setup hooks`).
+
+To read one issue's fields, reach straight for `issue view <number>`: it shows labels and state by default, and takes `--fields assignees,milestone,…` for the rest.
+You rarely need `issue list` to answer a question about a single issue.
 
 ## Discovery
 

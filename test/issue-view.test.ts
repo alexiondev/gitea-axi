@@ -47,6 +47,46 @@ describe("issue view", () => {
     expect(stdout).toContain("comment_count: 3 — use --comments to see full comments");
   });
 
+  it("renders the issue's labels comma-joined by default, with no flag", async () => {
+    server = await startFixtureServer([
+      {
+        method: "GET",
+        path: ISSUE_PATH,
+        body: issueBody({ labels: [{ name: "bug" }, { name: "regression" }] }),
+      },
+    ]);
+    const { stdout, exitCode } = await runCliTest(["issue", "view", "42"], {
+      env: testModeEnv(server.url),
+    });
+
+    expect(exitCode).toBe(0);
+    // TOON-quoted because the joined value contains a comma.
+    expect(stdout).toContain('labels: "bug, regression"');
+  });
+
+  it("appends named extra fields with --fields on top of the default fields", async () => {
+    server = await startFixtureServer([
+      {
+        method: "GET",
+        path: ISSUE_PATH,
+        body: issueBody({
+          assignees: [{ login: "alexion" }],
+          milestone: { title: "v2.0" },
+        }),
+      },
+    ]);
+    const { stdout, exitCode } = await runCliTest(
+      ["issue", "view", "42", "--fields", "assignees,milestone"],
+      { env: testModeEnv(server.url) },
+    );
+
+    expect(exitCode).toBe(0);
+    // Default fields are still present; the extra fields are appended.
+    expect(stdout).toContain("state: open");
+    expect(stdout).toContain("assignees: alexion");
+    expect(stdout).toContain("milestone: v2.0");
+  });
+
   it("renders comment_count: 0 when there are no comments", async () => {
     server = await startFixtureServer([
       { method: "GET", path: ISSUE_PATH, body: issueBody({ comments: 0 }) },
