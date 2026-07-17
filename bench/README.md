@@ -1,103 +1,28 @@
 # Benchmark harness
 
-This directory holds the benchmark harness that measures gitea-axi's central claim — that it is an agent-ergonomic, low-token interface to Gitea — against the `tea` CLI, the official `gitea-mcp` server, and raw Gitea REST calls.
+This directory holds the benchmark that tests gitea-axi's central claim — that it is an agent-ergonomic, low-token interface to Gitea — against the `tea` CLI, the official `gitea-mcp` server, and raw Gitea REST calls.
+This run bears that out on cost: gitea-axi posts the lowest cost-equivalent tokens and the lowest imputed cost of the four tools, though `gitea-mcp` edges it slightly on accuracy.
 
-It is **not part of the published npm package**.
-The package's `files` allow-list ships only `dist` and `skills`; `bench/` is excluded, and the packaging tier asserts it stays out of the tarball.
+## How it works
 
-The design lives in [`.claude/spec/benchmark-harness.md`](../.claude/spec/benchmark-harness.md) and the `.claude/adr/0014`–`0016` decision records.
-This README is the harness's own working documentation; it deliberately keeps the benchmark's vocabulary here rather than in the tool's domain glossary ([`.claude/CONTEXT.md`](../.claude/CONTEXT.md)), which describes gitea-axi's own language.
+Each arm is an agent given exactly one of the four tools and nothing else, run on the same fixed model at temperature zero, so the comparison measures the tool rather than the model.
+The suite is 20 tasks across four tiers — read, single-mutation, find-then-act, and multi-step — each run against a freshly seeded throwaway repository and scored deterministically by diffing the resulting repository state (or matching required facts in the agent's answer) against the seeded ground truth.
+The headline metric is cost-equivalent tokens: the four token components (fresh input, cache write, cache read, output) weighted by Anthropic's published API pricing ratios, which is why an arm can spend more raw tokens yet cost less.
 
-## Vocabulary
+## Results
 
-**arm** — one of the four tool conditions under comparison: `gitea-axi`, `tea`, `gitea-mcp`, `raw-api`.
-The comparison measures the tool, so the agent in each arm is given exactly one arm's tool.
+| arm | cost-equivalent tokens | raw tokens | success | imputed cost |
+| --- | ---: | ---: | ---: | ---: |
+| gitea-axi | 16,921 | 68,093 | 95% | $6.20 |
+| raw-api | 17,773 | 55,631 | 95% | $6.64 |
+| gitea-mcp | 17,898 | 60,028 | 97% | $6.82 |
+| tea | 20,505 | 80,702 | 90% | $7.25 |
 
-**cell** — one `(arm, task)` pair.
-A cell's trials accumulate as samples within it; deepening a cell's sample size adds samples rather than overwriting prior runs.
+All four arms completed the full matrix — 20 of 20 tasks each, at the reporting floor.
+gitea-axi wins on cost-equivalent tokens and on real imputed cost even though it does not use the fewest raw tokens: its interactions are output-light, and output is the most expensive component (weighted 5×), so its compact answers beat arms that emit more.
+gitea-mcp is the most accurate at 97% against gitea-axi's 95%, so the two leaders trade a small accuracy edge for a clear cost lead.
 
-**trial** — one run of a cell.
-Each cell defaults to five trials with a reporting floor of three.
+By tier, the read tasks are the hardest for every arm (75–83% success) — exact-answer reads, not mutations, are where correctness slips.
+tea is the outlier on find-then-act, dropping to 78% success at about 1.7× the cost-equivalent tokens of the other three arms.
 
-**tier** — the task category a task belongs to: `read`, `single-mutation`, `find-then-act`, `multi-step`.
-Views group by tier to show where an arm wins or loses.
-
-**cost-equivalent tokens** — the headline metric: the four token components weighted by Anthropic's published API pricing ratios (see ADR 0014).
-The raw component breakdown is retained on every sample so the data can be re-weighted without re-running.
-
-**seed** — the deterministic, idempotent starting state scripted into each throwaway repository before a trial, against which correctness is scored.
-
-**checker** — the deterministic scorer that diffs post-run repository state (mutation tasks) or matches required facts in the agent's report (read tasks) against the seeded ground truth.
-
-## Layout
-
-- `result.ts` — the immutable result-record shape and its tags (arm, task, tier, trial, timestamp).
-- `store.ts` — the append-only, per-cell sample store that accumulates result records.
-- `guard.ts` — the authoritative tool-isolation guard plus the curated per-arm bin directory that backs it.
-- `scoring-spec.ts` — the scoring-spec contract: a task's expected end state (mutation) or required answer facts (read), consumed by the checker and produced by the runner and task suite.
-- `checker.ts` — the deterministic scorer: the full-state diff for mutation tasks and the answer-match for read tasks, plus the `score` entry point that dispatches on task kind.
-- `seed-plan.ts` — the deterministic ground truth every throwaway repository is seeded to: the fixed labels, the open/closed issue spread across the discriminating dimensions, and the pull requests, as pure data plus `groundTruth(user)`, which realizes it into the `RepoState` the checker scores against.
-- `seed.ts` — the idempotent seeding scripted over the live Gitea API: `resolveBenchAccess` (which reuses gitea-axi's own tea-login credential discovery), `provisionRepo`, and `seedRepo`, reconciling each label, issue, pull request, comment, and review by its natural key so a re-run never duplicates the ground truth.
-- `arm.ts` — the per-arm scaffolding: `basePrompt` (the identical task-agnostic base every arm shares) and `buildArm`, which produces the single `ArmDefinition` the runner consumes — the assembled prompt plus the tool configuration. The gitea-axi arm embeds the bundled Agent Skill, the tea and raw-api arms get a one-line native-discovery pointer, and the gitea-mcp arm runs with the shell disabled and only the MCP server attached (its dispatcher schemas load eagerly). The shell arms' PATH and guard come from `guard.ts`.
-- `task.ts` — the runnable `BenchTask` wrapper (natural-language intent, tier, and a scoring spec keyed on the single available user) plus one `SAMPLE_TASK` that exercises the full path.
-- `task-suite.ts` — the full scored suite and the bonus definitions. `buildScoredSuite` returns the 20 shared-surface tasks (weighted four read / six single-mutation / six find-then-act / four multi-step), each phrased as a natural-language intent parametrized against the seed and carrying a tier and a scoring spec; its two review tasks are approve/request-changes or comment reviews depending on the self-review flag. `buildBonusTasks` returns the capability-asymmetric operations kept out of the scored suite, in both directions — gitea-axi's edges where the other arms fall short (full-text search, diff, checks, checkout, issue dependencies) and the repository/release/milestone operations for which gitea-axi is reported not-applicable — plus the approve/request-changes pair when self-review is unavailable.
-- `self-review.ts` — `probeSelfReview` and `detectSelfReviewSupport`, the capability probe that determines whether the host permits a user to approve or request changes on their own pull request, so the suite builder can promote the two review tasks or leave them as comment reviews. A live boundary, so it is exercised by the smoke run rather than mocked.
-- `snapshot.ts` — `captureRepoState`, the seed's counterpart: it reads the whole scored surface of a live repository back into the `RepoState` the checker diffs against, normalizing the few fields whose live form differs from the ground truth (notably label colours). A live boundary, so it is exercised by the smoke run rather than mocked.
-- `audit.ts` — `auditTranscript`, the post-run isolation audit: it re-runs the arm's own guard over the executed shell commands and checks channel discipline (a shell arm never reaches MCP tools; the MCP arm never reaches the shell), returning the leaks that flag a trial invalid rather than scored.
-- `runner.ts` — the single-cell runner: `runCell` threads every layer to run one `(arm, task, trial)` cell end to end — provision, seed, run the agent bounded by a turn cap and a wall-clock backstop, audit the transcript, capture and score the post-run state, append the sample, and delete the repository. The live host and the Agent SDK are factored behind the `BenchHost` and `AgentDriver` seams, so the orchestration is unit-tested with fakes while the live wiring is validated by the smoke run.
-- `host.ts` — `liveBenchHost`, the production `BenchHost`: a thin composition of `seed.ts` (provision, seed, delete) and `snapshot.ts` (capture) bound to one set of host credentials.
-- `sdk-driver.ts` — `sdkAgentDriver`, the production `AgentDriver`: it runs one arm through the Claude Agent SDK on the maintainer's subscription, enforcing isolation in-band via the SDK's permission callback (the arm's guard on every Bash command; the shell disabled on the MCP arm) and reporting the four token components (folding in the auxiliary small model), the turn count, the imputed cost, the transcript, and the final report. The SDK is loaded through a computed dynamic import so it is an optional peer needed only for live runs.
-- `run-loop.ts` — `runCells`, the run loop: it runs one chosen `(arm, task)` cell for a batch of trials (defaulting to five, with a reporting floor of three) by driving `runCell` and the sample store, deciding only how many trials to run and at what trial numbers. Deepening a cell continues numbering past the highest trial it already holds and appends, so a cell's sample size grows across sittings rather than being overwritten. It reimplements no orchestration — provision, run, score, and append stay in `runCell`.
-- `run.ts` — the maintainer-facing run-loop command. `parseRunArgs` is the pure, unit-tested argument seam; `runBenchCommand` is the live boundary that resolves host access, resolves the scored suite against the host's self-review support, selects the task, and drives `runCells`. Invoked via `npm run bench:run` (see below).
-- `aggregate.ts` — the aggregator: the pure seam that renders the accumulated sample store into a readable comparison. `readAllSamples` drains a store into a flat record list; `aggregate` rolls the records up against the task definitions into a `Report` (headline, per-tier and per-token-component breakdowns, and the bonus table); `renderReport` renders that report as stable text. The headline metric, `costEquivalentTokens`, is computed here at render time by weighting the four retained token components by ADR 0014's pricing ratios (fresh input 1×, cache-write 1.25×, cache-read 0.1×, output 5×), so the stored records can be re-weighted without re-running. It reads whatever samples exist and annotates incomplete coverage — cells below the reporting floor (partial) and unsampled cells (missing) — rather than blocking on a complete matrix. A pure function of the records plus the definitions, unit-tested against synthetic append-only sample stores.
-- `report.ts` — the maintainer-facing reporting command, the counterpart to `run.ts`. `parseReportArgs` is the pure argument seam; `runReportCommand` opens the store, drains it, aggregates against the scored suite and bonus, and prints `renderReport`. Unlike `run.ts` it has no live boundary — it reads only the local store on disk (no credentials, host, or Agent SDK) — so the whole command is deterministic and unit-tested, not smoke-run. Invoked via `npm run bench:report` (see below).
-
-## Running a cell
-
-The run-loop command runs one chosen cell on demand, so only the token budget available at that moment is spent:
-
-```
-GITEA_AXI_BENCH_LOGIN=<tea-login-name> npm run bench:run -- --arm gitea-axi --task close-csv-export-issue
-```
-
-It defaults to five trials per sitting with a reporting floor of three; pass `--trials <n>` to run a different batch, and `--help` for the full flag list.
-Re-running the same cell deepens it — the new trials append rather than overwrite — so a cell's sample size can be grown opportunistically across separate sittings.
-
-The command is executed with [`tsx`](https://tsx.is) (a devDependency) so the harness's TypeScript runs directly.
-Like the runner smoke tier it drives the live host and the Claude Agent SDK, so a real run needs a configured login, the `gitea-axi` CLI on `PATH`, the Agent SDK installed (`npm install @anthropic-ai/claude-agent-sdk` — an optional peer, declared but not installed by default), and a Claude subscription.
-
-## Reading the results
-
-The reporting command renders whatever has accumulated in the store into the readable comparison — the cost-equivalent-token headline, coverage annotated against the reporting floor, the per-tier and per-token-component breakdowns, and the bonus table:
-
-```
-npm run bench:report
-```
-
-It reads `bench/results/` by default; pass `--store <dir>` to read a different store, and `--help` for the full flag list.
-Incomplete coverage is annotated rather than hidden, so a half-run matrix still renders (unrun arms show an em dash, not a misleading zero).
-
-Unlike `bench:run` this command is offline — it reads only the local store, never the host — so it needs no login, host, or Agent SDK, and is safe to run at any time.
-The `--self-review` / `--no-self-review` flag only selects the bonus capability catalog (whether the approve/request-changes review pair appears there or in the scored suite); the scored coverage is identical either way, so set it to match the host the samples were run on.
-
-## Tests
-
-The harness's deterministic seams are unit-tested in this directory, colocated with their source, and run via:
-
-```
-npm run test:bench
-```
-
-They are kept out of the main fast tier so harness code never counts against the `src/` coverage thresholds.
-
-Seed provisioning and single-cell run orchestration are the two boundaries validated live rather than by mocks, since their value is the real Gitea API interaction and the real model run.
-The smoke tier talks to a real host — the maintainer's own, discovered through the tea-login credential path — and skips cleanly when no host is configured:
-
-```
-GITEA_AXI_BENCH_LOGIN=<tea-login-name> npm run test:bench:smoke
-```
-
-With `GITEA_AXI_BENCH_LOGIN` unset the smoke tier skips (a pass), matching the end-to-end tier's behavior when no live instance is configured.
-The runner smoke additionally requires the Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`, an optional peer of the harness, needed only for live runs) and the `gitea-axi` CLI on `PATH`; it skips when the SDK is not installed and needs a Claude subscription to run for real.
-The post-run transcript audit is what validates run orchestration: a run in which a foreign tool was reached is flagged invalid rather than scored.
-The self-review probe is the third live boundary: its smoke run provisions and seeds a throwaway repository, attempts an approval on the user's own pull request, and asserts the probe reaches a definite verdict — whichever way the host is configured.
+_Snapshot: 2026-07-17 — 4 arms × 20 tasks × 3 trials each (240 samples), a single run against one live Gitea host; imputed cost is Anthropic API-priced._
