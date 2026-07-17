@@ -9,6 +9,9 @@ Any commit message you write must follow the Conventional Commits specification 
 The `origin` remote is a self-hosted **Gitea** instance (`git.alexion.dev`), not GitHub.
 The `gh` CLI does not work here.
 
+The benchmark arms invoke the **built `dist/main.js`** (the `gitea-axi` binary on `PATH`), not the TypeScript source.
+Run `npm run build` before any live `bench:run` if you want `src/` changes reflected; the bench does not run from source.
+
 Prefer this project's own CLI for pull requests — it is the tool being built, so opening its PRs with it is the dogfood path:
 `npm run build && node dist/main.js pr create --login alexion --base main --head <branch> --title <text> --body-file <path>`.
 It reuses the `tea` login profiles, so it needs no separate credentials.
