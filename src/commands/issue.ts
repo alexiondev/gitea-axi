@@ -460,9 +460,17 @@ async function issueList(deps: CliDeps, args: string[]): Promise<string> {
   return renderList({
     noun: "issues",
     rows,
-    countLine: formatCountLine(rows.length, total, rows.length >= limit),
+    countLine: formatCountLine(rows.length, total, rows.length >= limit, countStateQualifier(state)),
     help: issueListSuggestions(context, state, rows.length, total),
   });
+}
+
+// The count line names the state the list was filtered to, so the answer to
+// "how many are open?" is on the summary line rather than only inferable from
+// each row. `all` imposes no narrowing and has no natural one-word name, so it
+// adds no qualifier and the generic count line stands.
+function countStateQualifier(state: IssueState): string | undefined {
+  return state === "all" ? undefined : state;
 }
 
 // The default detail fields reuse the same declarative extraction as the list

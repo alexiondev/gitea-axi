@@ -18,14 +18,20 @@ export function formatCountLine(
   shown: number,
   total: number | undefined,
   atLimit: boolean,
+  qualifier?: string,
 ): string {
+  // A generic, caller-supplied qualifier names what was counted (e.g. the state
+  // a list was filtered to) right after the count, so `count: 5 open of 5 total`
+  // answers "how many are open?" off the summary line. The helper stays unaware
+  // of any specific domain concept — callers that pass none render as before.
+  const counted = qualifier === undefined ? `${shown}` : `${shown} ${qualifier}`;
   if (total === undefined) {
     if (atLimit) {
-      return `count: ${shown} (showing first ${shown})`;
+      return `count: ${counted} (showing first ${shown})`;
     }
-    return `count: ${shown} of ${shown} total`;
+    return `count: ${counted} of ${shown} total`;
   }
-  return `count: ${shown} of ${total} total`;
+  return `count: ${counted} of ${total} total`;
 }
 
 /** Encode a named list block, with an explicit empty-state line when there are no rows. */

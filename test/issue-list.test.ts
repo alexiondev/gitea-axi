@@ -62,7 +62,7 @@ describe("issue list", () => {
 
     expect(exitCode).toBe(0);
     const lines = stdout.split("\n");
-    expect(lines[0]).toBe("count: 3 of 17 total");
+    expect(lines[0]).toBe("count: 3 open of 17 total");
     expect(lines[1]).toBe("issues[3]{number,title,state,author,created}:");
     expect(lines[2]).toMatch(/^ {2}42,"Fix login redirect loop, please",open,alexion,\d+(mo|[smhdy]) ago$/);
     expect(lines[3]).toMatch(/^ {2}41,Add dark mode,open,contributor,\d+(mo|[smhdy]) ago$/);
@@ -105,7 +105,7 @@ describe("issue list", () => {
     );
 
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("count: 1 of 1 total");
+    expect(stdout).toContain("count: 1 closed of 1 total");
     expect(stdout).toContain("37,Crash on empty config,closed,contributor");
   });
 
@@ -133,7 +133,7 @@ describe("issue list", () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("count: 0 of 0 total");
+    expect(stdout).toContain("count: 0 open of 0 total");
     expect(stdout).toContain("issues[0]: (none)");
     expect(stdout).toMatch(/^help\[\d+\]:/m);
   });
@@ -208,6 +208,28 @@ describe("issue list", () => {
 
     expect(stdout).toContain("issues[3]{number,title,state,author,created}:");
     expect(stdout).not.toContain("type");
+  });
+
+  it("names no state in the count line for --state all", async () => {
+    // `all` imposes no narrowing filter, so the count line stays the plain
+    // `count: <shown> of <total> total` form with no state qualifier.
+    const issues = Array.from({ length: 9 }, (_, i) => issueOf(i + 1));
+    server = await startFixtureServer([
+      {
+        method: "GET",
+        path: ISSUES_PATH,
+        query: { state: "all" },
+        headers: { "X-Total-Count": "9" },
+        body: issues,
+      },
+    ]);
+    const { stdout, exitCode } = await runCliTest(
+      ["issue", "list", "--state", "all"],
+      { env: testModeEnv(server.url) },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdout.split("\n")[0]).toBe("count: 9 of 9 total");
   });
 });
 
@@ -375,7 +397,7 @@ describe("issue list --sort", () => {
     expect(renderedNumbers(stdout)[0]).toBe(7);
     // The count line keeps T from X-Total-Count: sorting reorders without
     // changing membership, so the unfiltered total stays accurate (ADR 0005).
-    expect(stdout).toContain("count: 30 of 52 total");
+    expect(stdout).toContain("count: 30 open of 52 total");
   });
 
   it("applies --limit to the sorted order, not to the fetched pages", async () => {
@@ -393,7 +415,7 @@ describe("issue list --sort", () => {
     );
 
     expect(renderedNumbers(stdout)).toEqual([38, 42]);
-    expect(stdout).toContain("count: 2 of 17 total");
+    expect(stdout).toContain("count: 2 open of 17 total");
     // Pagination reads full pages regardless of --limit; the cap is applied after sorting.
     expect(server.requests[0]!.query.limit).toBe("50");
   });
@@ -408,7 +430,7 @@ describe("issue list --sort", () => {
       env: testModeEnv(server.url),
     });
 
-    expect(stdout).toContain("count: 2 of 3 total");
+    expect(stdout).toContain("count: 2 open of 3 total");
   });
 
   it("stops at the page cap when a server keeps returning full pages", async () => {

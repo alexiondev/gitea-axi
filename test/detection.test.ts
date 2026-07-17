@@ -122,7 +122,7 @@ describe("repository context detection", () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("count: 3 of 3 total");
+    expect(stdout).toContain("count: 3 open of 3 total");
     expect(server!.requests[0]!.headers.authorization).toBe("Bearer detected-token");
     // Auto-detected context: suggestions must not carry override flags.
     expect(stdout).not.toContain("-R testowner/testrepo");
@@ -143,7 +143,7 @@ describe("repository context detection", () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("count: 3 of 3 total");
+    expect(stdout).toContain("count: 3 open of 3 total");
   });
 
   it("fails with REPO_NOT_FOUND when there is no recognizable origin remote", async () => {
