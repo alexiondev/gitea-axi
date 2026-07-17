@@ -253,9 +253,18 @@ export function checkReadAnswer(facts: RequiredFact[], report: string): CheckRes
   };
 }
 
-/** Lower-case and collapse runs of whitespace so incidental phrasing does not matter. */
+/**
+ * Lower-case, drop markdown emphasis/code markers, and collapse runs of
+ * whitespace so incidental phrasing and formatting do not matter — a report that
+ * bolds a value (`**5**`) matches a phrasing that does not (`5 open`), since the
+ * emphasis is presentation, not substance.
+ */
 function normalizeText(text: string): string {
-  return text.toLowerCase().replace(/\s+/g, " ").trim();
+  return text
+    .toLowerCase()
+    .replace(/[*_`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**

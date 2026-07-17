@@ -310,6 +310,36 @@ describe("checkReadAnswer", () => {
 
     expect(checkReadAnswer(facts, report)).toEqual({ pass: true });
   });
+
+  it("passes when the report wraps a fact's phrasing in markdown emphasis", () => {
+    // The fact's acceptable phrasing is the bare substring "5 open".
+    const facts: RequiredFact[] = [
+      { description: "open-issue count", anyOf: ["5 open"] },
+    ];
+
+    // The report is correct but renders the number in markdown bold. Emphasis
+    // markers (`*`, `_`, backtick) are formatting, not substance, so "**5**" is
+    // equivalent to "5" and the phrasing "5 open" is present.
+    const report = "There are **5** open issues in the repository.";
+
+    expect(checkReadAnswer(facts, report)).toEqual({ pass: true });
+  });
+
+  it("fails when a markdown-formatted report states the wrong value", () => {
+    // The only acceptable phrasing counts five open issues.
+    const facts: RequiredFact[] = [
+      { description: "open-issue count", anyOf: ["5 open"] },
+    ];
+
+    // The report is markdown-formatted but substantively wrong: it counts three,
+    // not five. Stripping emphasis must only remove formatting, so after stripping
+    // ("there are 3 open issues") the phrasing "5 open" is still absent.
+    const report = "There are **3** open issues in the repository.";
+
+    const result = checkReadAnswer(facts, report);
+
+    expect(result.pass).toBe(false);
+  });
 });
 
 describe("score", () => {
