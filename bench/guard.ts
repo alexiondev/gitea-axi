@@ -1,4 +1,4 @@
-import { accessSync, constants, mkdirSync, symlinkSync } from "node:fs";
+import { accessSync, constants, mkdirSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import type { Arm } from "./result.js";
 
@@ -303,7 +303,12 @@ export function provisionArmBin(
       `cannot provision the ${arm} arm: its binary "${binary}" was not found on PATH`,
     );
   }
-  symlinkSync(target, join(binDir, binary));
+  // Idempotent: the trials in one sitting share a single bin directory, so a prior
+  // trial may have already created this link. Remove any existing entry before
+  // re-linking rather than letting symlinkSync fail with EEXIST on the second trial.
+  const linkPath = join(binDir, binary);
+  rmSync(linkPath, { force: true });
+  symlinkSync(target, linkPath);
 }
 
 /** Resolve `binary` to the absolute path of the first executable of that name on PATH. */

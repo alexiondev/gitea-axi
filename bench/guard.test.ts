@@ -219,4 +219,18 @@ describe("provisionArmBin", () => {
   it("throws when the arm's binary cannot be located", () => {
     expect(() => provisionArmBin("tea", binDir, () => null)).toThrow(/tea/);
   });
+
+  it("is idempotent across the trials of one sitting sharing a bin directory", () => {
+    // A benchmark sitting runs several trials against one per-sitting bin
+    // directory, so provisionArmBin is called once per trial on the same dir.
+    // A repeat call must not throw and must leave a single symlink, not a
+    // duplicate or a partially-clobbered link.
+    expect(() => {
+      provisionArmBin("gitea-axi", binDir, locate);
+      provisionArmBin("gitea-axi", binDir, locate);
+    }).not.toThrow();
+
+    expect(readdirSync(binDir)).toEqual(["gitea-axi"]);
+    expect(readlinkSync(join(binDir, "gitea-axi"))).toBe("/fake/prefix/gitea-axi");
+  });
 });
