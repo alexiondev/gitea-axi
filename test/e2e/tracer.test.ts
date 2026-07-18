@@ -40,7 +40,7 @@ describe.skipIf(!E2E_URL)("end-to-end: tracer command set", () => {
 
     expect(exitCode).toBe(0);
     const lines = stdout.split("\n");
-    expect(lines[0]).toBe("count: 3 of 3 total");
+    expect(lines[0]).toBe("count: 3 open of 3 total");
     expect(lines[1]).toBe("issues[3]{number,title,state,author,created}:");
     for (const title of instance.openTitles) {
       expect(stdout).toContain(title);
@@ -58,7 +58,7 @@ describe.skipIf(!E2E_URL)("end-to-end: tracer command set", () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("count: 1 of 1 total");
+    expect(stdout).toContain("count: 1 closed of 1 total");
     expect(stdout).toContain(instance.closedTitle);
     expect(stdout).toContain(",closed,");
   });
@@ -69,7 +69,7 @@ describe.skipIf(!E2E_URL)("end-to-end: tracer command set", () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("count: 1 of 3 total");
+    expect(stdout).toContain("count: 1 open of 3 total");
     expect(stdout).toContain("issues[1]{number,title,state,author,created}:");
     expect(stdout).toContain("issue list --limit <n>");
   });
