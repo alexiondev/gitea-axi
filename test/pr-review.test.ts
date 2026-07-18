@@ -110,6 +110,187 @@ describe("pr review", () => {
     expect(reviewPosted()?.body).toEqual({ event: "COMMENT", body: "Looks good" });
   });
 
+  it("maps a --comments-file new-comment entry to comments[] with new_position and reports the count", async () => {
+    server = await startFixtureServer([{ method: "POST", path: REVIEWS_PATH, body: {} }]);
+    const path = files.write(
+      "comments.json",
+      JSON.stringify([{ path: "src/x.ts", line: 42, body: "fresh point" }]),
+    );
+
+    const { stdout, exitCode } = await runCliTest(
+      ["pr", "review", "9", "--comment", "--comments-file", path],
+      { env: testModeEnv(server.url) },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(reviewPosted()?.body).toEqual({
+      event: "COMMENT",
+      comments: [{ path: "src/x.ts", new_position: 42, body: "fresh point" }],
+    });
+    expect(stdout).toContain("action: comment");
+    expect(stdout).toContain("number: 9");
+    expect(stdout).toContain("comments: 1");
+  });
+
+  it("reconstructs a reply's anchor from the target comment's diff_hunk via the reviews fan-out", async () => {
+    server = await startFixtureServer([
+      { method: "POST", path: REVIEWS_PATH, body: {} },
+      {
+        method: "GET",
+        path: REVIEWS_PATH,
+        body: [{ id: 30, state: "COMMENT", user: { login: "rev" } }],
+      },
+      {
+        method: "GET",
+        path: `${REVIEWS_PATH}/30/comments`,
+        body: [
+          {
+            id: 500,
+            path: "src/a.ts",
+            diff_hunk: "@@ -10,3 +10,4 @@\n ctxA\n ctxB\n+added",
+            body: "orig",
+          },
+        ],
+      },
+    ]);
+    const path = files.write(
+      "comments.json",
+      JSON.stringify([{ reply_to: 500, body: "my reply" }]),
+    );
+
+    const { stdout, exitCode } = await runCliTest(
+      ["pr", "review", "9", "--comment", "--comments-file", path],
+      { env: testModeEnv(server.url) },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(reviewPosted()?.body).toEqual({
+      event: "COMMENT",
+      comments: [{ path: "src/a.ts", new_position: 12, body: "my reply" }],
+    });
+    expect(stdout).toContain("comments: 1");
+  });
+
+  it("rejects a reply whose reply_to id is not among the PR's review comments without posting", async () => {
+    server = await startFixtureServer([
+      { method: "POST", path: REVIEWS_PATH, body: {} },
+      {
+        method: "GET",
+        path: REVIEWS_PATH,
+        body: [{ id: 30, state: "COMMENT", user: { login: "rev" } }],
+      },
+      {
+        method: "GET",
+        path: `${REVIEWS_PATH}/30/comments`,
+        body: [
+          {
+            id: 500,
+            path: "src/a.ts",
+            diff_hunk: "@@ -10,3 +10,4 @@\n ctxA\n ctxB\n+added",
+            body: "orig",
+          },
+        ],
+      },
+    ]);
+    const path = files.write(
+      "comments.json",
+      JSON.stringify([{ reply_to: 999, body: "reply to nobody" }]),
+    );
+
+    const { stdout, exitCode } = await runCliTest(
+      ["pr", "review", "9", "--comment", "--comments-file", path],
+      { env: testModeEnv(server.url) },
+    );
+
+    expect(exitCode).toBe(2);
+    expect(stdout).toContain("code: VALIDATION_ERROR");
+    expect(reviewPosted()).toBeUndefined();
+  });
+
+  it("composes a top-level --body with the inline comments batch in one payload", async () => {
+    server = await startFixtureServer([{ method: "POST", path: REVIEWS_PATH, body: {} }]);
+    const path = files.write(
+      "comments.json",
+      JSON.stringify([{ path: "src/y.ts", line: 7, body: "inline note" }]),
+    );
+
+    const { exitCode } = await runCliTest(
+      [
+        "pr",
+        "review",
+        "9",
+        "--request-changes",
+        "--body",
+        "overall: please fix",
+        "--comments-file",
+        path,
+      ],
+      { env: testModeEnv(server.url) },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(reviewPosted()?.body).toEqual({
+      event: "REQUEST_CHANGES",
+      body: "overall: please fix",
+      comments: [{ path: "src/y.ts", new_position: 7, body: "inline note" }],
+    });
+  });
+
+  it("anchors a reply on a deleted line to old_position inferred from the target", async () => {
+    server = await startFixtureServer([
+      { method: "POST", path: REVIEWS_PATH, body: {} },
+      {
+        method: "GET",
+        path: REVIEWS_PATH,
+        body: [{ id: 40, state: "COMMENT", user: { login: "rev" } }],
+      },
+      {
+        method: "GET",
+        path: `${REVIEWS_PATH}/40/comments`,
+        body: [
+          {
+            id: 700,
+            path: "src/b.ts",
+            diff_hunk: "@@ -20,2 +20,1 @@\n ctx1\n-removed",
+            body: "orig",
+          },
+        ],
+      },
+    ]);
+    const path = files.write(
+      "comments.json",
+      JSON.stringify([{ reply_to: 700, body: "reply on deletion" }]),
+    );
+
+    const { exitCode } = await runCliTest(
+      ["pr", "review", "9", "--comment", "--comments-file", path],
+      { env: testModeEnv(server.url) },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(reviewPosted()?.body).toEqual({
+      event: "COMMENT",
+      comments: [{ path: "src/b.ts", old_position: 21, body: "reply on deletion" }],
+    });
+  });
+
+  it("rejects a comments-file entry mixing reply_to with path/line before any API call", async () => {
+    server = await startFixtureServer([]);
+    const path = files.write(
+      "comments.json",
+      JSON.stringify([{ reply_to: 500, path: "src/a.ts", line: 3, body: "confused entry" }]),
+    );
+
+    const { stdout, exitCode } = await runCliTest(
+      ["pr", "review", "9", "--comment", "--comments-file", path],
+      { env: testModeEnv(server.url) },
+    );
+
+    expect(exitCode).toBe(2);
+    expect(stdout).toContain("code: VALIDATION_ERROR");
+    expect(server.requests).toHaveLength(0);
+  });
+
   it("forwards a --body-file review body from the file contents", async () => {
     server = await startFixtureServer([{ method: "POST", path: REVIEWS_PATH, body: {} }]);
     const path = files.write("review.txt", "Please fix the tests");

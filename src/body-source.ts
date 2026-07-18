@@ -1,7 +1,6 @@
-import { readFileSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
 import type { CliDeps } from "./deps.js";
 import { axiError } from "./errors.js";
+import { readFlagFile } from "./flag-file.js";
 import { flagValue } from "./flags.js";
 
 /**
@@ -60,15 +59,5 @@ function bodyFlagSuggestion(command: string): string[] {
 }
 
 function readBodyFile(deps: CliDeps, path: string, command: string): string {
-  const absolute = isAbsolute(path) ? path : resolve(deps.cwd, path);
-  try {
-    return readFileSync(absolute, "utf8");
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw axiError(
-      `Cannot read --body-file ${path}: ${reason}`,
-      "VALIDATION_ERROR",
-      bodyFlagSuggestion(command),
-    );
-  }
+  return readFlagFile(deps, path, "--body-file", bodyFlagSuggestion(command));
 }

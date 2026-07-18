@@ -99,3 +99,25 @@ export async function fetchReviewComments(
     throw classifyHttpError(error);
   }
 }
+
+/**
+ * Every inline review comment on a PR, flattened across all its reviews. Gitea
+ * has no get-comment-by-id endpoint, so the write side's reply path uses this
+ * reviews-plus-comments fan-out — the same one `pr view --reviews` performs — to
+ * locate a reply's target comment by id.
+ */
+export async function fetchAllReviewComments(
+  api: GiteaClient,
+  context: RepoContext,
+  number: number,
+): Promise<PullReviewComment[]> {
+  const reviews = await fetchReviews(api, context, number);
+  const lists = await Promise.all(
+    reviews.map((review) =>
+      review.id !== undefined
+        ? fetchReviewComments(api, context, number, review.id)
+        : Promise.resolve<PullReviewComment[]>([]),
+    ),
+  );
+  return lists.flat();
+}

@@ -44,6 +44,7 @@ import { resolveLabelIds, resolveMilestoneId } from "../lookup.js";
 import { fetchAllPages, readTotalCount } from "../paginate.js";
 import { formatCountLine, renderDetail, renderList, renderScalar, type DetailBlock } from "../render.js";
 import { fetchReviewComments, fetchReviewDecision, fetchReviews } from "../review.js";
+import { loadInlineComments, resolveInlineComments } from "../review-comments.js";
 import { suggestCommand } from "../suggestions.js";
 import { relativeTime } from "../time.js";
 
@@ -284,6 +285,8 @@ flags:
   --comment             Leave a review comment without approving or rejecting
   --body <text>         Review body
   --body-file <path>    Read the review body from a file (mutually exclusive with --body)
+  --comments-file <path>  JSON array of inline comments to submit with the review;
+                          each entry is {reply_to, body} or {path, line, body}
   --help                Show this help
 
 global flags:
@@ -1223,15 +1226,18 @@ async function prReview(deps: CliDeps, args: string[]): Promise<string> {
       "--comment": { takesValue: false },
       "--body": { takesValue: true },
       "--body-file": { takesValue: true },
+      "--comments-file": { takesValue: true },
     },
     "pr review",
   );
   const number = parsePositionalNumber(positionals, "pr review", "pull request");
 
   // Everything the caller's own input can settle is checked before any request
-  // goes out: the action flag count first, then the body source.
+  // goes out: the action flag count first, then the body source, then the
+  // inline-comment batch (parsed and shape-validated from the file).
   const chosen = resolveReviewAction(flags);
   const body = resolveBodySource(deps, flags, "pr review");
+  const inlineComments = loadInlineComments(deps, flags, "pr review");
 
   const context = await resolveRepoContext(deps);
   const api = createClient(context);
@@ -1240,15 +1246,24 @@ async function prReview(deps: CliDeps, args: string[]): Promise<string> {
   if (body !== undefined) {
     payload.body = body;
   }
+  // Replies are resolved against the PR's existing comments before the POST, so
+  // an unknown `reply_to` fails without a submission ever going out.
+  if (inlineComments !== undefined && inlineComments.length > 0) {
+    payload.comments = await resolveInlineComments(api, context, number, inlineComments);
+  }
   try {
     await api.repos.repoCreatePullReview(context.owner, context.name, number, payload);
   } catch (error) {
     throw classifyHttpError(error);
   }
 
+  const item: Record<string, unknown> = { number, action: chosen.action };
+  if (payload.comments !== undefined) {
+    item.comments = payload.comments.length;
+  }
   return renderDetail({
     noun: "review",
-    item: { number, action: chosen.action },
+    item,
     help: [suggestCommand(context, `pr view ${number} --reviews`, "to see the review in full")],
   });
 }
