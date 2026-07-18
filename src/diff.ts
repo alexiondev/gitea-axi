@@ -56,3 +56,20 @@ export function truncateDiff(diff: string, full: boolean): DiffResult {
     original_length: diff.length,
   };
 }
+
+/**
+ * Structurally trim a review comment's `diff_hunk` to its anchor: the `@@`
+ * header line plus the hunk's last two lines. A hunk of three lines or fewer is
+ * already covered by that (header + last two), so it is returned unchanged.
+ *
+ * This is deliberately not the char-based body truncation: it keeps both the
+ * file-line anchor (the `@@` header) and the code at the comment (the tail),
+ * which a keep-head char truncation would get backwards by dropping the tail.
+ */
+export function trimDiffHunk(hunk: string): string {
+  const lines = hunk.split("\n");
+  if (lines.length <= 3) {
+    return hunk;
+  }
+  return [lines[0], ...lines.slice(-2)].join("\n");
+}

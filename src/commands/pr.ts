@@ -38,7 +38,7 @@ import {
   splitFlag,
 } from "../flags.js";
 import { fetchChecks } from "../checks.js";
-import { fetchPullDiff, truncateDiff } from "../diff.js";
+import { fetchPullDiff, trimDiffHunk, truncateDiff } from "../diff.js";
 import { checkoutPullHead, currentBranch } from "../git.js";
 import { resolveLabelIds, resolveMilestoneId } from "../lookup.js";
 import { fetchAllPages, readTotalCount } from "../paginate.js";
@@ -739,6 +739,19 @@ function headSha(pull: PullRequest): string {
   return sha;
 }
 
+/**
+ * The id Gitea gave a review comment — the handle a reply targets. The client
+ * types it optional, but every real comment has one, and an id invented to fill
+ * the gap would be reported as fact and copied into a `reply_to`, so a comment
+ * without one is treated as the broken answer it is (mirroring {@link pullNumber}).
+ */
+function reviewCommentId(comment: PullReviewComment): number {
+  if (comment.id === undefined) {
+    throw axiError("Gitea returned a review comment with no id", "UNKNOWN");
+  }
+  return comment.id;
+}
+
 interface PrDetailOptions {
   host: string;
   full: boolean;
@@ -813,6 +826,13 @@ interface ReviewRowsOptions {
  * `official`/`stale` flags and its inline (diff) comments. One comments fetch per
  * review, all in flight at once; review and comment bodies truncate at 800 chars
  * unless `--full` is set.
+ *
+ * Each inline comment carries its anchor: `id` (the reply handle), `resolved`
+ * (`yes`/`no` from whether Gitea populated the comment's `resolver`), and
+ * `diff_hunk` — structurally trimmed to its `@@` header plus tail by default, or
+ * emitted verbatim under `--full`. The raw `position`/`original_position` diff
+ * offsets are deliberately not surfaced: they are unmappable to a file line
+ * without the patch, and the `@@` header already carries the line range.
  */
 async function buildReviewRows(
   api: GiteaClient,
@@ -837,8 +857,11 @@ async function buildReviewRows(
     stale: review.stale ? "yes" : "no",
     body: truncate(review.body ?? ""),
     comments: commentLists[index]!.map((comment) => ({
+      id: reviewCommentId(comment),
       author: comment.user?.login ?? "",
       path: comment.path ?? "",
+      resolved: comment.resolver ? "yes" : "no",
+      diff_hunk: options.full ? (comment.diff_hunk ?? "") : trimDiffHunk(comment.diff_hunk ?? ""),
       body: truncate(comment.body ?? ""),
     })),
   }));
