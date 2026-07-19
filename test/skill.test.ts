@@ -36,19 +36,23 @@ describe("bundled Agent Skill markdown", () => {
 
   it("references each command group as a one-liner", () => {
     const body = skill.toLowerCase();
-    for (const group of ["issue", "pr", "label", "search", "setup"]) {
+    for (const group of ["issue", "pr", "label", "search"]) {
       expect(body, `expected the skill to mention the ${group} command group`).toContain(
         group,
       );
     }
   });
 
-  it("points at the bare dashboard and per-command help for discovery", () => {
+  it("steers find-then-act and does not push exploratory discovery", () => {
     const body = skill.toLowerCase();
-    // Bare dashboard: running the binary with no arguments.
-    expect(body).toContain("no argument");
-    expect(body).toContain("dashboard");
-    // Per-command help.
-    expect(body).toContain("--help");
+    // The intended steering: find the target, then act on it.
+    expect(body).toContain("find the target");
+    expect(body).toContain("act on it");
+    // The find/act discipline: not a full survey, and not both find commands at once.
+    expect(body).toContain("not a survey");
+    expect(body).toContain("not both");
+    // The removed exploratory anti-pattern must be gone.
+    expect(body).not.toContain("dashboard");
+    expect(body).not.toContain("no argument");
   });
 });
