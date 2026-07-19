@@ -60,6 +60,17 @@ function hostnameOf(url: string, origin: string): string {
   }
 }
 
+/**
+ * Normalize a Gitea base URL to the host root the client expects. The client
+ * (gitea-js) appends `/api/v1` itself, so a value that already carries it — a
+ * natural guess when the variable is literally named `..._API_URL` — would double
+ * the segment and 404 as a spurious `REPO_NOT_FOUND`. Strip a trailing `/api/v1`
+ * (with any trailing slashes) so the host base and the API endpoint both work.
+ */
+function normalizeApiBase(url: string): string {
+  return url.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
+}
+
 function resolveTestModeContext(
   deps: CliDeps,
   apiUrl: string,
@@ -72,10 +83,11 @@ function resolveTestModeContext(
       ["Set `GITEA_AXI_REPO=OWNER/NAME` or pass `-R OWNER/NAME`"],
     );
   }
+  const base = normalizeApiBase(apiUrl);
   return {
     ...parseRepoSpec(overrides.repoSpec, overrides.repoOrigin),
-    host: hostnameOf(apiUrl, "`GITEA_AXI_API_URL`"),
-    apiUrl: apiUrl.replace(/\/+$/, ""),
+    host: hostnameOf(base, "`GITEA_AXI_API_URL`"),
+    apiUrl: base,
     token: deps.env.GITEA_AXI_TOKEN ?? "",
     repoSource: overrides.repoSource,
     loginSource: overrides.loginSource,
@@ -184,7 +196,7 @@ export async function resolveRepoContext(deps: CliDeps): Promise<RepoContext> {
     owner,
     name,
     host,
-    apiUrl: login.url.replace(/\/+$/, ""),
+    apiUrl: normalizeApiBase(login.url),
     token,
     repoSource: overrides.repoSource,
     loginSource: overrides.loginSource,

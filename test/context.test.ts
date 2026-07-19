@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveRepoContext } from "../src/context.js";
+import type { CliDeps } from "../src/deps.js";
 import { startFixtureServer, type FixtureServer } from "./fixture-server.js";
 import { runCliTest, testModeEnv } from "./harness.js";
 
@@ -115,5 +117,51 @@ describe("context overrides", () => {
     });
 
     expect(exitCode).toBe(0);
+  });
+});
+
+describe("apiUrl normalization", () => {
+  function depsWithApiUrl(apiUrl: string): CliDeps {
+    return {
+      env: {
+        GITEA_AXI_API_URL: apiUrl,
+        GITEA_AXI_REPO: "acme/widgets",
+        GITEA_AXI_TOKEN: "test-token",
+      },
+      cwd: process.cwd(),
+      globals: {},
+    };
+  }
+
+  it("strips a trailing /api/v1 suffix from the host base", async () => {
+    const context = await resolveRepoContext(
+      depsWithApiUrl("https://git.example.com/api/v1"),
+    );
+
+    expect(context.apiUrl).toBe("https://git.example.com");
+  });
+
+  it("strips a trailing /api/v1/ with a trailing slash", async () => {
+    const context = await resolveRepoContext(
+      depsWithApiUrl("https://git.example.com/api/v1/"),
+    );
+
+    expect(context.apiUrl).toBe("https://git.example.com");
+  });
+
+  it("leaves a host base without an /api/v1 suffix unchanged", async () => {
+    const context = await resolveRepoContext(
+      depsWithApiUrl("https://git.example.com"),
+    );
+
+    expect(context.apiUrl).toBe("https://git.example.com");
+  });
+
+  it("strips a lone trailing slash from the host base", async () => {
+    const context = await resolveRepoContext(
+      depsWithApiUrl("https://git.example.com/"),
+    );
+
+    expect(context.apiUrl).toBe("https://git.example.com");
   });
 });
