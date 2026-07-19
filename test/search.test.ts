@@ -402,3 +402,149 @@ describe("search empty results", () => {
     });
   }
 });
+
+/**
+ * The `help[1]:` next-step line is emitted by `suggestCommand`, so it appears
+ * wrapped in a `Run \`gitea-axi …\`` line with `-R`/`--login` normalization.
+ * These tests pull that help block out of the output and assert on the
+ * count-conditional suggestion within it.
+ */
+function helpBlock(stdout: string): string {
+  const lines = stdout.split("\n");
+  const start = lines.findIndex((line) => /^help\[\d+\]:/.test(line));
+  expect(start).toBeGreaterThanOrEqual(0);
+  // The block runs from the help[N]: header to the next blank line / EOF.
+  const rest = lines.slice(start);
+  const end = rest.findIndex((line, i) => i > 0 && line.trim() === "");
+  return (end === -1 ? rest : rest.slice(0, end)).join("\n");
+}
+
+describe("search issues count-conditional next-step suggestion", () => {
+  it("suggests the list fallback when there are zero in-repo matches", async () => {
+    server = await startFixtureServer([
+      { method: "GET", path: SEARCH_PATH, headers: { "X-Total-Count": "0" }, body: [] },
+    ]);
+
+    const { stdout, exitCode } = await runCliTest(
+      ["search", "issues", "login bug"],
+      { env: testModeEnv(server.url) },
+    );
+
+    expect(exitCode).toBe(0);
+    const help = helpBlock(stdout);
+    expect(help).toContain("issue list --state all");
+    expect(help).toContain("to list all issues instead");
+    expect(help).not.toContain("issue view");
+  });
+
+  it("fills the real number when there is exactly one in-repo match", async () => {
+    server = await startFixtureServer([
+      {
+        method: "GET",
+        path: SEARCH_PATH,
+        headers: { "X-Total-Count": "1" },
+        body: [searchIssueOf(2, { title: "Fix login redirect loop" })],
+      },
+    ]);
+
+    const { stdout, exitCode } = await runCliTest(
+      ["search", "issues", "login bug"],
+      { env: testModeEnv(server.url) },
+    );
+
+    expect(exitCode).toBe(0);
+    const help = helpBlock(stdout);
+    expect(help).toContain("issue view 2");
+    expect(help).toContain("to see it in full");
+    expect(help).not.toContain("issue view <number>");
+  });
+
+  it("keeps the <number> placeholder when there are two or more in-repo matches", async () => {
+    server = await startFixtureServer([
+      {
+        method: "GET",
+        path: SEARCH_PATH,
+        headers: { "X-Total-Count": "2" },
+        body: [
+          searchIssueOf(42, { title: "Fix login redirect loop" }),
+          searchIssueOf(41, { title: "Login button unresponsive" }),
+        ],
+      },
+    ]);
+
+    const { stdout, exitCode } = await runCliTest(
+      ["search", "issues", "login bug"],
+      { env: testModeEnv(server.url) },
+    );
+
+    expect(exitCode).toBe(0);
+    const help = helpBlock(stdout);
+    expect(help).toContain("issue view <number>");
+    expect(help).toContain("to see a match in full");
+  });
+});
+
+describe("search prs count-conditional next-step suggestion", () => {
+  it("suggests the list fallback when there are zero in-repo matches", async () => {
+    server = await startFixtureServer([
+      { method: "GET", path: SEARCH_PATH, headers: { "X-Total-Count": "0" }, body: [] },
+    ]);
+
+    const { stdout, exitCode } = await runCliTest(
+      ["search", "prs", "flaky ci"],
+      { env: testModeEnv(server.url) },
+    );
+
+    expect(exitCode).toBe(0);
+    const help = helpBlock(stdout);
+    expect(help).toContain("pr list --state all");
+    expect(help).toContain("to list all pull requests instead");
+    expect(help).not.toContain("pr view");
+  });
+
+  it("fills the real number when there is exactly one in-repo match", async () => {
+    server = await startFixtureServer([
+      {
+        method: "GET",
+        path: SEARCH_PATH,
+        headers: { "X-Total-Count": "1" },
+        body: [searchIssueOf(2, { title: "Retry flaky CI jobs" })],
+      },
+    ]);
+
+    const { stdout, exitCode } = await runCliTest(
+      ["search", "prs", "flaky ci"],
+      { env: testModeEnv(server.url) },
+    );
+
+    expect(exitCode).toBe(0);
+    const help = helpBlock(stdout);
+    expect(help).toContain("pr view 2");
+    expect(help).toContain("to see it in full");
+    expect(help).not.toContain("pr view <number>");
+  });
+
+  it("keeps the <number> placeholder when there are two or more in-repo matches", async () => {
+    server = await startFixtureServer([
+      {
+        method: "GET",
+        path: SEARCH_PATH,
+        headers: { "X-Total-Count": "2" },
+        body: [
+          searchIssueOf(73, { title: "Retry flaky CI jobs" }),
+          searchIssueOf(72, { title: "Stabilize CI runners" }),
+        ],
+      },
+    ]);
+
+    const { stdout, exitCode } = await runCliTest(
+      ["search", "prs", "flaky ci"],
+      { env: testModeEnv(server.url) },
+    );
+
+    expect(exitCode).toBe(0);
+    const help = helpBlock(stdout);
+    expect(help).toContain("pr view <number>");
+    expect(help).toContain("to see a match in full");
+  });
+});

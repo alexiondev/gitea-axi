@@ -99,6 +99,8 @@ _Avoid_: depends, depends-on, dependencies
 
 **search**: The full-text query commands (`search issues <query>`, `search prs <query>`), repo-scoped via `owner` param plus [[client-side filtering]] by repository (Gitea's `/repos/issues/search` has no repo-name filter).
 Results use a locator schema (`number`, `title`, `state`, `author`, `created`) — search finds the number; `issue view` / `pr view` load the detail.
+The [[next-step suggestion]] is conditioned on the in-repo match count: zero matches point at the non-indexed `issue list --state all` / `pr list --state all` fallback ("to list all … instead"), which recovers from both an over-narrow query and issue-indexer lag; exactly one match fills the real number (`issue view <n>`, Principle 9's single-id fill); two or more keep the parameterized `<number>` placeholder.
+Search never auto-loads the detail even on a single match — it stays a locator (see ADR 0017).
 The forbidden `--search` flag on the list commands redirects here.
 _Avoid_: query command, find
 

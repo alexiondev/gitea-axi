@@ -107,6 +107,10 @@ interface SearchKind {
   noun: string;
   /** The command a matched number feeds into. */
   viewCommand: string;
+  /** The list command suggested as the fallback when a search finds nothing. */
+  listCommand: string;
+  /** Human plural for the fallback note, e.g. "issues" or "pull requests". */
+  things: string;
   /** The `--help` text for this variant. */
   help: string;
 }
@@ -116,6 +120,8 @@ const SEARCH_ISSUES: SearchKind = {
   type: "issues",
   noun: "issues",
   viewCommand: "issue view",
+  listCommand: "issue list",
+  things: "issues",
   help: SEARCH_ISSUES_HELP,
 };
 
@@ -124,6 +130,8 @@ const SEARCH_PRS: SearchKind = {
   type: "pulls",
   noun: "pull_requests",
   viewCommand: "pr view",
+  listCommand: "pr list",
+  things: "pull requests",
   help: SEARCH_PRS_HELP,
 };
 
@@ -217,11 +225,24 @@ async function runSearch(deps: CliDeps, args: string[], kind: SearchKind): Promi
     extractRow(issue, [...SEARCH_FIELDS, ...extraFields], { now, host: context.host, full }),
   );
 
+  // The next-step suggestion is conditioned on the match count. On a miss the
+  // `view` hint is nonsensical, so point at the non-indexed list as a fallback
+  // (it recovers from both an over-narrow query and index lag); on a single match
+  // fill the real number (Principle 9's single-id fill); otherwise leave the
+  // number parameterized. Search stays a locator either way — it never auto-loads
+  // the detail (see ADR 0017).
+  const suggestion =
+    total === 0
+      ? suggestCommand(context, `${kind.listCommand} --state all`, `to list all ${kind.things} instead`)
+      : total === 1
+        ? suggestCommand(context, `${kind.viewCommand} ${matches[0]!.number}`, "to see it in full")
+        : suggestCommand(context, `${kind.viewCommand} <number>`, "to see a match in full");
+
   return renderList({
     noun: kind.noun,
     rows,
     countLine: formatCountLine(rows.length, total, false),
-    help: [suggestCommand(context, `${kind.viewCommand} <number>`, "to see a match in full")],
+    help: [suggestion],
   });
 }
 
