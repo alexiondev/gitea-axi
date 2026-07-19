@@ -131,10 +131,21 @@ export interface RepoState {
  * whitespace and case normalization), so a count or a name can be phrased
  * variously without resorting to an LLM judge. `description` names the fact in
  * diagnostics when it is missing.
+ *
+ * `anyOf` matches a *contiguous* substring, which is brittle for facts a human
+ * naturally pads with filler — "5 issues are currently open" does not contain
+ * the fixed phrase "5 issues are open". For those, supply `pattern`: a regular
+ * expression (matched against the same normalized report) that satisfies the
+ * fact when it matches, so the count itself can be recognised rather than one
+ * exact wording. A fact is present when any `anyOf` rendering *or* `pattern`
+ * matches; `anyOf` stays the human-readable renderings even when `pattern`
+ * carries the real matcher.
  */
 export interface RequiredFact {
   description: string;
   anyOf: string[];
+  /** Optional regex (source, matched case-insensitively against the normalized report). */
+  pattern?: string;
 }
 
 /**

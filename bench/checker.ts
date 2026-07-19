@@ -241,9 +241,7 @@ function matchByKey<T>(
  */
 export function checkReadAnswer(facts: RequiredFact[], report: string): CheckResult {
   const haystack = normalizeText(report);
-  const missing = facts.filter(
-    (fact) => !fact.anyOf.some((rendering) => haystack.includes(normalizeText(rendering))),
-  );
+  const missing = facts.filter((fact) => !factPresent(fact, haystack));
   if (missing.length === 0) {
     return { pass: true };
   }
@@ -251,6 +249,20 @@ export function checkReadAnswer(facts: RequiredFact[], report: string): CheckRes
     pass: false,
     differences: missing.map((fact) => `missing required fact: ${fact.description}`),
   };
+}
+
+/**
+ * Whether a required fact is present in the normalized report: any `anyOf`
+ * rendering as a contiguous substring, or the optional `pattern` regex matching.
+ * The pattern is compiled case-insensitively over the already-normalized text, so
+ * it recognises a count padded with filler ("5 issues are currently open") that no
+ * fixed phrase would.
+ */
+function factPresent(fact: RequiredFact, haystack: string): boolean {
+  if (fact.anyOf.some((rendering) => haystack.includes(normalizeText(rendering)))) {
+    return true;
+  }
+  return fact.pattern !== undefined && new RegExp(fact.pattern, "i").test(haystack);
 }
 
 /**

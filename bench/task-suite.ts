@@ -92,6 +92,11 @@ function readTasks(): BenchTask[] {
         {
           description: "the repository has 5 open issues",
           anyOf: ["5 open", "five open", "open issues: 5", "open: 5", "5 issues are open"],
+          // "5" followed by "open" across up to four alphabetic filler words, so
+          // natural padding ("5 issues are currently open") is recognised while a
+          // digit between them (a wrong "5 issues, 3 open") is not: the filler run
+          // is alphabetic only, so it cannot span another count.
+          pattern: "\\b5(?: [a-z]+){0,4} open\\b",
         },
       ]),
     },

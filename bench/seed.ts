@@ -359,12 +359,122 @@ async function ensurePullRequest(
   await ensureReviews(access, coords, number, pr.reviews);
 }
 
+/** How long the readiness gate polls before giving up, and how often it re-checks. */
+const READINESS_TIMEOUT_MS = 60_000;
+const READINESS_INTERVAL_MS = 750;
+
+/** Resolve after `ms` milliseconds. */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** A search hit's minimal shape: the repository the matched issue/pull belongs to. */
+interface SearchHit {
+  repository?: { name?: string } | null;
+}
+
+/**
+ * Whether the issue indexer has caught up: a full-text search for `title` of the
+ * given kind returns a hit in this repository. The endpoint spans every repo the
+ * owner can access (mirroring `gitea-axi search`), so a hit only counts when its
+ * repository matches. A non-2xx or a not-yet-indexed title reads as not-ready.
+ */
+async function searchIndexed(
+  access: BenchAccess,
+  coords: RepoCoords,
+  type: "issues" | "pulls",
+  title: string,
+): Promise<boolean> {
+  const query = new URLSearchParams({ q: title, type, owner: coords.owner, state: "all", limit: "50" });
+  const res = await request(access, "GET", `/repos/issues/search?${query.toString()}`);
+  if (!res.ok) {
+    return false;
+  }
+  const hits = (await res.json()) as SearchHit[];
+  return hits.some((hit) => hit.repository?.name === coords.repo);
+}
+
+/**
+ * The reason a freshly seeded repository is not yet ready for the agent, or `null`
+ * when it is. Ready means an independent read sees the repository and its full
+ * seeded issue and pull spread, and the issue indexer returns a seeded issue and
+ * pull — the two consistency windows (repo visibility and index lag) an agent
+ * would otherwise race and fail against. Every read is non-throwing, so a
+ * transient error reads as not-ready and is retried rather than propagated.
+ */
+async function readinessGap(access: BenchAccess, coords: RepoCoords): Promise<string | null> {
+  const repoPath = `/repos/${coords.owner}/${coords.repo}`;
+  const repoRes = await request(access, "GET", repoPath);
+  if (!repoRes.ok) {
+    return `repository read returned ${repoRes.status}`;
+  }
+  const issuesRes = await request(access, "GET", `${repoPath}/issues?type=issues&state=all&limit=100`);
+  if (!issuesRes.ok) {
+    return `issue list returned ${issuesRes.status}`;
+  }
+  const issues = (await issuesRes.json()) as GiteaIssue[];
+  if (issues.length < SEED_PLAN.issues.length) {
+    return `only ${issues.length}/${SEED_PLAN.issues.length} issues visible`;
+  }
+  const pullsRes = await request(access, "GET", `${repoPath}/pulls?state=all&limit=100`);
+  if (!pullsRes.ok) {
+    return `pull list returned ${pullsRes.status}`;
+  }
+  const pulls = (await pullsRes.json()) as GiteaPull[];
+  if (pulls.length < SEED_PLAN.pullRequests.length) {
+    return `only ${pulls.length}/${SEED_PLAN.pullRequests.length} pull requests visible`;
+  }
+  const sampleIssue = SEED_PLAN.issues[0]!.title;
+  if (!(await searchIndexed(access, coords, "issues", sampleIssue))) {
+    return `issue "${sampleIssue}" not yet indexed for search`;
+  }
+  const samplePull = SEED_PLAN.pullRequests[0]!.title;
+  if (!(await searchIndexed(access, coords, "pulls", samplePull))) {
+    return `pull request "${samplePull}" not yet indexed for search`;
+  }
+  return null;
+}
+
+/**
+ * Block until a freshly seeded repository is fully consistent for the agent, or
+ * fail loudly if it never settles within the timeout. Gitea makes a just-created
+ * repository and its just-written issues and pulls visible to the seed's own
+ * writes immediately, but an independent reader — the agent, a fresh process
+ * moments later — can hit a brief 404 window on the repository and a longer lag on
+ * the async issue indexer. Both are the benchmark's races, not the tool's, so
+ * closing them here keeps a scored run measuring gitea-axi rather than host
+ * propagation. A timeout is a harness failure surfaced to the maintainer, never a
+ * scored agent failure.
+ */
+export async function waitForSeedReady(
+  access: BenchAccess,
+  coords: RepoCoords,
+  timeoutMs = READINESS_TIMEOUT_MS,
+  intervalMs = READINESS_INTERVAL_MS,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let gap = await readinessGap(access, coords);
+  while (gap !== null) {
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `seeded repository ${coords.owner}/${coords.repo} not ready after ${timeoutMs}ms: ${gap}`,
+      );
+    }
+    await delay(intervalMs);
+    gap = await readinessGap(access, coords);
+  }
+}
+
 /**
  * Seed a freshly provisioned repository to the ground truth, idempotently. Labels
  * come first (so issues and pull requests can apply them), then the issue spread,
  * then the pull requests. Returns the deterministic ground-truth RepoState the
  * checker scores against; on a fresh repository the created numbers match it,
  * and a re-run leaves them unchanged.
+ *
+ * Before returning, it waits out the repository-visibility and issue-indexer
+ * consistency windows (see waitForSeedReady), so the agent that runs next never
+ * races a repository that is not yet readable or searchable.
  */
 export async function seedRepo(access: BenchAccess, coords: RepoCoords): Promise<RepoState> {
   const user = await currentUser(access);
@@ -384,6 +494,7 @@ export async function seedRepo(access: BenchAccess, coords: RepoCoords): Promise
     await ensurePullRequest(access, coords, pr, labelIds, pullsByTitle);
   }
 
+  await waitForSeedReady(access, coords);
   return groundTruth(user);
 }
 

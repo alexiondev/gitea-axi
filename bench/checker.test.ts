@@ -340,6 +340,64 @@ describe("checkReadAnswer", () => {
 
     expect(result.pass).toBe(false);
   });
+
+  it("passes via pattern when filler words break every contiguous anyOf phrase", () => {
+    // A count fact is brittle when pinned to fixed phrases: a human padding the
+    // answer with filler words ("issues are currently") splits any contiguous
+    // rendering. The optional `pattern` — a case-insensitive regex source — spans
+    // that filler as a bounded run of alphabetic words between the number and
+    // "open", so the fact is satisfied even though no `anyOf` phrase appears verbatim.
+    const facts: RequiredFact[] = [
+      {
+        description: "count of open issues",
+        anyOf: ["5 open", "5 issues are open"],
+        pattern: "\\b5(?: [a-z]+){0,4} open\\b",
+      },
+    ];
+
+    // "issues are currently" is inserted between "5" and "open", so neither
+    // contiguous anyOf phrase matches — but the pattern's alphabetic filler run does.
+    const report = "5 issues are currently open (5 of 5 total).";
+
+    expect(checkReadAnswer(facts, report)).toEqual({ pass: true });
+  });
+
+  it("fails when a digit interrupts the number-to-open run, so a wrong count cannot slip through", () => {
+    // The same pattern-bearing fact as above. Here the report states a DIFFERENT
+    // open count (3), merely mentioning the number 5 elsewhere. The pattern's
+    // filler run is alphabetic only, so the digit "3" between the matched "5" and
+    // "open" is not spanned, and no anyOf phrase matches either — the fact fails.
+    const facts: RequiredFact[] = [
+      {
+        description: "count of open issues",
+        anyOf: ["5 open", "5 issues are open"],
+        pattern: "\\b5(?: [a-z]+){0,4} open\\b",
+      },
+    ];
+
+    // "5 issues in total, and 3 open" — the 5 is a total, the open count is 3.
+    const report = "There are 5 issues in total, and 3 open.";
+
+    const result = checkReadAnswer(facts, report);
+
+    expect(result.pass).toBe(false);
+    // The unmet fact must remain identifiable by its own description.
+    if (result.pass === false) {
+      expect(result.differences.some((d) => d.includes("count of open issues"))).toBe(true);
+    }
+  });
+
+  it("still matches on anyOf alone when a fact carries no pattern", () => {
+    // A fact without `pattern` behaves exactly as before: only the contiguous
+    // anyOf renderings are consulted, unaffected by the new pattern support.
+    const facts: RequiredFact[] = [
+      { description: "count of open issues", anyOf: ["7 open issues", "seven open issues"] },
+    ];
+
+    const report = "The board shows 7 open issues right now.";
+
+    expect(checkReadAnswer(facts, report)).toEqual({ pass: true });
+  });
 });
 
 describe("score", () => {
