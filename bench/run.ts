@@ -57,6 +57,8 @@ export interface RunArgs {
   turnCap: number;
   wallClockMs: number;
   storeRoot: string;
+  /** Optional bundled-skill override for the gitea-axi arm; defaults to the shipped SKILL.md. */
+  skillPath?: string;
 }
 
 /** The parse outcome: a request for help, or a resolved configuration to run. */
@@ -71,6 +73,7 @@ const KNOWN_FLAGS = new Set([
   "turn-cap",
   "wall-clock-ms",
   "store",
+  "skill",
 ]);
 
 /** A usage error, surfaced to the maintainer with the offending detail. */
@@ -157,6 +160,7 @@ export function parseRunArgs(
     turnCap,
     wallClockMs,
     storeRoot: flags.get("store") ?? DEFAULT_STORE_ROOT,
+    ...(flags.has("skill") ? { skillPath: flags.get("skill") } : {}),
   };
 }
 
@@ -180,6 +184,7 @@ Options:
   --turn-cap <n>       Per-run turn cap (default: ${DEFAULT_TURN_CAP})
   --wall-clock-ms <n>  Per-run wall-clock backstop in ms (default: ${DEFAULT_WALL_CLOCK_MS})
   --store <dir>        Sample store root (default: ${DEFAULT_STORE_ROOT})
+  --skill <path>       Override the gitea-axi arm's bundled skill (default: shipped SKILL.md)
   -h, --help           Show this help`;
 
 /** Render the run-loop tally into the lines printed after a sitting. */
@@ -246,7 +251,7 @@ export async function runBenchCommand(
       driver: sdkAgentDriver(),
       store,
       bounds: { turnCap: parsed.turnCap, wallClockMs: parsed.wallClockMs },
-      build: { binRoot },
+      build: { binRoot, ...(parsed.skillPath !== undefined ? { skillPath: parsed.skillPath } : {}) },
     });
     for (const line of summarize(result, parsed.storeRoot)) {
       out(line);
