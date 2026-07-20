@@ -71,3 +71,9 @@ Its `act` fork declares `RawContinueOnError` on the `Step` struct only — `pkg/
 Gitea's own syntax-comparison page does not list the gap.
 Put `continue-on-error` on each step instead: `act` and GitHub Actions both honour it there, and a job whose every step carries it concludes green on either platform.
 The same fork historically ignored `jobs.<id>.if` (go-gitea#25897), so treat any job-level key as needing a check against the fork's structs rather than against GitHub's documentation.
+
+The session-start hook installed by `setup hooks` records the entrypoint's **absolute path**, not the bare binary name, on every wrapper-based install.
+`resolvePortableHookCommand` in `axi-sdk-js` returns the bare name only when a `PATH` entry *realpath-matches* the entrypoint.
+npm symlinks its `bin` entry straight at `dist/main.js`, so that match succeeds; Nix installs a generated wrapper script that invokes `node <path>`, whose realpath is the wrapper, so the match cannot succeed and the store path is recorded.
+Passing `binaryNames` therefore does not make the hook portable under Nix — verify by driving the installed binary and reading `~/.claude/settings.json`, not by reading the SDK's interface.
+The consequence is silent: a hook whose recorded path no longer exists does not run and does not warn.

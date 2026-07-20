@@ -18,6 +18,14 @@ Install gitea-axi's ambient context for agent sessions.
 Both are idempotent: re-running updates the managed files in place rather than
 failing. There is no postinstall script — installation is always explicit.
 
+Re-run "setup hooks" after upgrading gitea-axi. The hook records an absolute
+path to the entrypoint, which moves when the install location changes, and a
+session-start hook that cannot be executed fails silently rather than warning.
+This matters most for immutable installs such as Nix, where every rebuild lands
+the entrypoint at a fresh path and the old one is eventually collected. When the
+path moves, the re-run may leave the stale entry behind instead of replacing it;
+remove it by hand if a duplicate appears.
+
 flags:
   --help           Show this help
 `;
