@@ -14,7 +14,7 @@ Run `npm run build` before any live `bench:run` if you want `src/` changes refle
 
 Prefer this project's own CLI for pull requests — it is the tool being built, so opening its PRs with it is the dogfood path:
 `npm run build && node dist/main.js pr create --login alexion --base main --head <branch> --title <text> --body-file <path>`.
-It reuses the `tea` login store, which here holds exactly `alexion` and `csv-reviewer` — there is no `axi` profile.
+It reuses the `tea` login store, which here holds exactly `alexion` — there is no `axi` profile, and the `csv-reviewer` profile that used to exist is gone for good.
 `selectLogin` matches the `--login` value against those names exactly, so `--login alexion` works and an unknown name like `--login axi` fails with `VALIDATION_ERROR` ("Login profile "axi" not found").
 Fall back to `tea pr create --login alexion --base main --head <branch>` only for what gitea-axi cannot do yet; `tea pr` still lists PRs until `pr list` lands (task 0008).
 
@@ -34,3 +34,9 @@ The fixture tier is unaffected — it stubs the endpoint — so this bites only 
 That ADR moved *command dispatch* to `gitea-js`; it explicitly kept `tea` for **credential discovery**, and its own Consequences section says so.
 Per [ADR 0001](.claude/adr/0001-diff-auth-via-tea-login-list.md) as amended, `src/context.ts` resolves auth by shelling out to `tea login list --output json` (discovery) and `tea login helper get --login <name>` (token, with in-place OAuth refresh).
 The only bypass is the test hook requiring `GITEA_AXI_API_URL` + `GITEA_AXI_TOKEN` + `GITEA_AXI_REPO` together; there is no user-facing path that avoids `tea`, and `TEA_NOT_INSTALLED` exists for its absence.
+
+Neither `node`/`npm` nor `tea` is on the `PATH` in a non-interactive shell on this machine, and there is no `~/.gitconfig`.
+This is a NixOS host with no global Node install, and the repository has no dev shell yet (task 0039 adds one).
+Until then, prefix commands with `nix shell nixpkgs#nodejs -c ...`, adding `nixpkgs#tea` for anything that resolves credentials — including `gitea-axi pr create`.
+`node_modules/` may be absent too, so `npm ci` first.
+Commits need an explicit identity: `git -c user.name=alexion -c user.email=contact@alexion.dev commit ...`, matching the existing history.
