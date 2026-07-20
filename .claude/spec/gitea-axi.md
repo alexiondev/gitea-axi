@@ -39,7 +39,7 @@ It ships as both an installable npm CLI and a bundled Agent Skill, so any agent 
 
 ### Language and Runtime
 
-TypeScript on Node 20+, matching the `gh-axi` reference implementation.
+TypeScript on the supported Node long-term-support majors — currently 22 and 24, as declared in the manifest's engine range and matrixed over by continuous integration.
 ESM module format.
 
 ### Implementation Strategy

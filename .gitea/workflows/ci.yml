@@ -16,7 +16,22 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    container: node:20-bookworm
+    container: node:${{ matrix.node }}-bookworm
+
+    strategy:
+      # Every leg's result is wanted: a failure on one Node major says nothing
+      # about the other, and cancelling the sibling would hide half the answer.
+      fail-fast: false
+      matrix:
+        # The supported Node majors, matching the manifest's declared engine
+        # range. Node 20 is end-of-life and deliberately absent.
+        node: ["22", "24"]
+        # Augments the highest leg with a flag, so the steps that run once
+        # share one named condition rather than each restating a version
+        # number. Keep this entry's `node` matching the last element above.
+        include:
+          - node: "24"
+            highest: true
 
     services:
       gitea:
@@ -50,5 +65,20 @@ jobs:
       - name: Unit and integration tiers (with coverage thresholds)
         run: npm run test:coverage
 
+      # Deterministic, and needs neither network nor the agent SDK, so it runs
+      # everywhere. Its non-default runner configuration makes it an easy tier
+      # to believe is running when it is not.
+      - name: Benchmark harness tier
+        run: npm run test:bench
+
+      # Exercises the Gitea API contract rather than Node-version behaviour, so
+      # one leg is enough.
       - name: End-to-end tier
+        if: matrix.highest
         run: npm run test:e2e
+
+      # Slow, and near enough version-independent — but the only automated guard
+      # on the distribution artifact, since publishing is a manual command.
+      - name: Packaging tier
+        if: matrix.highest
+        run: npm run test:pack

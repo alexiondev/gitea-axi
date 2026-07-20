@@ -63,8 +63,13 @@ describe("npm distribution artifact", () => {
 
     expect(packedManifest.license).toBe("MIT");
 
+    // The declared range names exactly the majors continuous integration
+    // matrixes over, so nothing is promised that is never tested. Node 20 is
+    // end-of-life and deliberately no longer named.
     const engines = packedManifest.engines as Record<string, string> | undefined;
-    expect(engines?.node).toMatch(/20/);
+    expect(engines?.node).toMatch(/22/);
+    expect(engines?.node).toMatch(/24/);
+    expect(engines?.node).not.toMatch(/20/);
 
     expect(packedManifest.type).toBe("module");
   });
