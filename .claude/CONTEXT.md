@@ -184,8 +184,15 @@ Chosen where the operator's agent configuration is generated and therefore read-
 _Avoid_: nix install, declarative setup
 
 **home-manager module**: The flake output that declares the Agent Skill and the [[SessionStart hook]] from the package, as the [[declarative install path]]'s ergonomic front end (task 0045).
-Importing it does nothing until enabled; it installs the package by default, with a null package the documented way to declare configuration without installing the binary, and carries a toggle per managed piece.
+Importing it does nothing until `programs.gitea-axi.enable` is set, which installs the binary unconditionally; a null package is the documented way to declare the context without installing the binary.
+The agent context is gated by one [[harness integration toggle]] per harness rather than a toggle per artefact (ADR 0021).
+The hook is declared through `programs.claude-code`'s settings option so home-manager merges it with the operator's own; the Skill is written through home-manager's file mechanism directly, which composes with both forms of the operator's own skills option and fixes the path-form collision ADR 0020 could only escape.
 _Avoid_: nix module, HM module
+
+**harness integration toggle**: The module option that declares a harness's agent context — for Claude Code, `programs.gitea-axi.enableClaudeCodeIntegration`, defaulting on, covering both the [[Agent Skill]] and the [[SessionStart hook]] (ADR 0021).
+Named after home-manager's own `enableBashIntegration` convention, so a future harness reads as an `enableCodexIntegration` sibling.
+Both artefacts land only when the harness's own module is enabled, silently and without an assertion; the Skill carries an explicit `programs.claude-code.enable` gate because, unlike the hook, it does not inherit that module's own gate.
+_Avoid_: skill toggle, hook toggle, per-artefact toggle
 
 **hook specification**: The single committed declaration of the [[SessionStart hook]]'s recorded shape — command, timeout, and matcher (task 0045).
 Read by both the Nix expression and the test suite, so that the [[declarative install path]] and the [[imperative install path]] cannot disagree about what the hook is without failing a test.

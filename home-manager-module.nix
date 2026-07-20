@@ -1,11 +1,17 @@
-# A home-manager module declaring gitea-axi's ambient context — the bundled
-# Agent Skill and the SessionStart hook — for an operator whose agent
-# configuration is generated rather than owned (ADR 0020).
+# A home-manager module installing gitea-axi and, when a harness is present,
+# its ambient context — the bundled Agent Skill and the SessionStart hook
+# (ADR 0020, reshaped by ADR 0021).
 #
-# It is a wiring layer and nothing more. Both pieces come from the package's
-# published attributes, so what a declarative configuration installs and what
-# `gitea-axi setup` writes imperatively are the same two artefacts, and neither
-# is restated here.
+# `programs.gitea-axi.enable` installs the CLI, always. The Claude Code context
+# follows the harness: it is declared under one per-harness toggle and lands
+# only when `programs.claude-code.enable` is also on. gitea-axi is a working CLI
+# without a harness, so enabling it on a host with no Claude Code installs the
+# binary and nothing else, with no assertion.
+#
+# The module is a wiring layer and nothing more. Both artefacts come from the
+# package's published attributes, so what a declarative configuration installs
+# and what `gitea-axi setup` writes imperatively are the same two artefacts, and
+# neither is restated here.
 #
 # Importing this module changes nothing until `programs.gitea-axi.enable` is set.
 {
@@ -26,8 +32,6 @@ let
 
   defaultPackage = pkgs.callPackage ./package.nix { };
 
-  # Both integrations write into files a sibling module owns, so nothing lands
-  # unless that module is the one writing them.
   claudeCode = config.programs.claude-code;
 in
 {
@@ -39,9 +43,9 @@ in
       default = defaultPackage;
       defaultText = lib.literalExpression "pkgs.callPackage ./package.nix { }";
       description = ''
-        The gitea-axi package to install, or `null` to declare the
-        configuration without installing the binary — for an operator who
-        supplies it another way, such as `environment.systemPackages`.
+        The gitea-axi package to install, or `null` to declare the ambient
+        context without installing the binary — for an operator who supplies it
+        another way, such as `environment.systemPackages`.
 
         The SessionStart hook records a name resolved on `PATH`, so a binary
         installed elsewhere satisfies it. With `null` the Agent Skill is still
@@ -49,27 +53,20 @@ in
       '';
     };
 
-    skill.enable = lib.mkOption {
+    enableClaudeCodeIntegration = lib.mkOption {
       type = lib.types.bool;
       default = true;
       description = ''
-        Whether to install gitea-axi's bundled Agent Skill, which teaches the
-        agent to reach for gitea-axi over `tea` or raw API calls.
+        Whether to declare gitea-axi's Claude Code context — the bundled Agent
+        Skill and the SessionStart hook — alongside the CLI.
 
-        Turn this off to keep writing the Skill with `gitea-axi setup` while
-        managing the rest declaratively.
-      '';
-    };
+        Both artefacts land only when `programs.claude-code.enable` is also on;
+        with it off they are silently absent, matching how home-manager's own
+        `enableBashIntegration`-style toggles behave against a disabled sibling.
 
-    sessionStartHook.enable = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-      description = ''
-        Whether to register the SessionStart hook that renders the gitea-axi
-        dashboard at the start of an agent session.
-
-        Turn this off to keep writing the hook with `gitea-axi setup hooks`
-        while managing the rest declaratively.
+        Turn this off to install gitea-axi declaratively while writing the
+        Claude Code context by hand or with `gitea-axi setup`. The toggle
+        generalises: a future harness reads as `enableCodexIntegration`.
       '';
     };
   };
@@ -78,34 +75,44 @@ in
     lib.mkMerge [
       (lib.mkIf (cfg.package != null) { home.packages = [ cfg.package ]; })
 
-      # Declared through the Claude Code module's own options rather than by
-      # writing its files, so an operator who already declares Skills and
-      # SessionStart hooks gets ours merged into theirs instead of a collision.
-      (lib.mkIf cfg.skill.enable {
-        programs.claude-code.skills.gitea-axi = sourcePackage.skill;
-      })
+      # The two Claude Code artefacts move together under one per-harness
+      # toggle. They are gated by different mechanisms internally — the Skill by
+      # an explicit `claude-code.enable` condition, the hook by the Claude Code
+      # module's own gate — because of how each is declared, below.
+      (lib.mkIf cfg.enableClaudeCodeIntegration (
+        lib.mkMerge [
+          # The hook is declared through the Claude Code module's own settings
+          # option. That composes it with an operator's own SessionStart hooks
+          # instead of colliding, and the module drops the declaration for free
+          # when it is disabled — so no explicit `claude-code.enable` gate here.
+          { programs.claude-code.settings.hooks.SessionStart = [ sourcePackage.sessionStartHook ]; }
 
-      (lib.mkIf cfg.sessionStartHook.enable {
-        programs.claude-code.settings.hooks.SessionStart = [ sourcePackage.sessionStartHook ];
-      })
-
-      {
-        # Without this the options above are set and silently dropped, leaving
-        # an operator with a configuration that says the Skill is installed and
-        # a session that never sees it.
-        assertions = [
-          {
-            assertion = (cfg.skill.enable || cfg.sessionStartHook.enable) -> claudeCode.enable;
-            message = ''
-              programs.gitea-axi declares a Claude Code Agent Skill and session
-              hook, which programs.claude-code writes. Set
-              programs.claude-code.enable = true, or turn off
-              programs.gitea-axi.skill.enable and
-              programs.gitea-axi.sessionStartHook.enable.
-            '';
-          }
-        ];
-      }
+          # The Skill is written as an ordinary file into Claude Code's skills
+          # directory, rather than contributed to `programs.claude-code.skills`.
+          # That composes with both forms of the operator's own skills option —
+          # an attribute set and a single path for a whole directory — because
+          # it never touches that option's type, so the path-form collision
+          # disappears at its root instead of being escaped by a toggle.
+          #
+          # Writing through home.file does not inherit the Claude Code module's
+          # `enable`-gate the way declaring through its options does, so the
+          # Skill is gated on `claude-code.enable` explicitly. The gate is also
+          # what keeps package realisation lazy: home.file reads the Skill's
+          # source directory while evaluating, so an ungated write would realise
+          # the package on every host — even one with no Claude Code that
+          # installs nothing from it.
+          #
+          # `configDir` is read from the Claude Code module rather than
+          # hardcoded, so the Skill lands beside that module's own skills
+          # wherever the operator points it.
+          (lib.mkIf claudeCode.enable {
+            home.file."${claudeCode.configDir}/skills/gitea-axi" = {
+              source = sourcePackage.skill;
+              recursive = true;
+            };
+          })
+        ]
+      ))
     ]
   );
 }
