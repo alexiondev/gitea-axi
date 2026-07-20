@@ -156,16 +156,37 @@ _Avoid_: mock mode, stub mode
 
 ### Distribution
 
-**Agent Skill**: The markdown file bundled inside the npm package and installed to `~/.claude/skills/` by the `setup` command.
+**Agent Skill**: The markdown file bundled inside the npm package and installed to `~/.claude/skills/` by the `setup` command, or declared from the package by the [[home-manager module]].
 _Avoid_: skill file, Claude skill
 
 **setup**: The explicit subcommand that installs the Agent Skill into `~/.claude/skills/`; gitea-axi's primary fulfillment of AXI Principle 7 (Ambient context).
 Idempotent: re-running reports already-installed/updated rather than failing.
 There is no postinstall script — installation of the skill is always an explicit user action.
 `setup hooks` additionally opts into the [[SessionStart hook]].
+It is the [[imperative install path]], and works only where the operator owns the target files; against a read-only target it reports the condition rather than writing.
 _Avoid_: postinstall, installer script
 
-**SessionStart hook**: An opt-in ambient-context mechanism installed by `setup hooks` via `axi-sdk-js`'s `installSessionStartHooks()` (Claude Code `settings.json`, Codex `hooks.json`, OpenCode plugin).
+**SessionStart hook**: An opt-in ambient-context mechanism installed by `setup hooks` via `axi-sdk-js`'s `installSessionStartHooks()` (Claude Code `settings.json`, Codex `hooks.json`, OpenCode plugin), or declared by the [[home-manager module]].
 It runs the bare `gitea-axi` binary (the short [[dashboard]] tier) in the session's working directory at session start and injects the output into the agent's context.
 The SDK's installer registers the binary with no arguments, so the hook always runs the short tier; outside a Gitea repo it produces the dashboard's `REPO_NOT_FOUND` error, an accepted noise trade-off.
+The recorded command is currently the entrypoint's absolute path on any wrapper-based install, which rots whenever that path moves; recording the bare binary name and resolving it through `PATH` is agreed and lands with task 0043.
 _Avoid_: session hook, ambient hook, postinstall hook
+
+**imperative install path**: Installation of the Agent Skill and the [[SessionStart hook]] by running `setup`, which writes into the operator's agent configuration directory.
+Requires the operator to own those files; a declaratively generated configuration renders them read-only and the command reports rather than writes.
+Contrast the [[declarative install path]]. Both are supported and neither supersedes the other.
+_Avoid_: manual install, imperative setup
+
+**declarative install path**: Installation of the Agent Skill and the [[SessionStart hook]] by declaring them in a Nix configuration, which generates the agent configuration rather than mutating it.
+Agreed and specified; the outputs it consumes land with task 0045.
+Consumes the package's exposed Skill location and [[hook specification]], either directly or through the [[home-manager module]].
+Chosen where the operator's agent configuration is generated and therefore read-only; contrast the [[imperative install path]].
+_Avoid_: nix install, declarative setup
+
+**home-manager module**: The flake output that declares the Agent Skill and the [[SessionStart hook]] from the package, as the [[declarative install path]]'s ergonomic front end (task 0045).
+Importing it does nothing until enabled; it installs the package by default, with a null package the documented way to declare configuration without installing the binary, and carries a toggle per managed piece.
+_Avoid_: nix module, HM module
+
+**hook specification**: The single committed declaration of the [[SessionStart hook]]'s recorded shape — command, timeout, and matcher (task 0045).
+Read by both the Nix expression and the test suite, so that the [[declarative install path]] and the [[imperative install path]] cannot disagree about what the hook is without failing a test.
+_Avoid_: hook config, hook schema

@@ -87,6 +87,12 @@ Leaving a statement the commit itself documents as untrue seemed worse than a on
 
 ### Follow-up
 
-The successor task is described in the spec's Further Notes but not yet written as a task file.
-It should carry its own ADR and cover both defects together, since both trace to the same resolution line: the absolute-path recording, and `isManagedHook` recognising its hook by substring.
-Deleting `package.nix`'s `postUnpack` rename belongs to it.
+The successor is task 0043, which covers both defects together — the absolute-path recording and `isManagedHook` recognising its hook by substring — since both trace to the same resolution line, and deletes `package.nix`'s `postUnpack` rename with them.
+
+Grilling the mitigation afterwards found the framing here too narrow.
+The maintainer's agent configuration is generated declaratively, so `~/.claude/settings.json` and the installed Skill are both read-only symlinks into the Nix store: `setup hooks` cannot write at all, and `setup` crashes outright on an unhandled filesystem error.
+The recorded path's *shape* is therefore not the whole defect — the deeper one is that `setup` is write-only against a target that some operators cannot let it write.
+Tasks 0044 and 0045 follow from that: a clean failure on unwritable targets, and a declarative install path that generates the configuration instead of mutating it.
+
+The help-text mitigation added by this task is deliberately left in place rather than pre-emptively reverted.
+It is accurate until task 0043 lands, which removes it as an acceptance criterion.
