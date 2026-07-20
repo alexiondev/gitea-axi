@@ -2,7 +2,7 @@
 # is kept GitHub-Actions-compatible so the GitHub mirror can adopt this file
 # nearly verbatim (copy it to .github/workflows/).
 #
-# The job runs inside a node container so the disposable Gitea service is
+# The `test` job runs inside a node container so the disposable Gitea service is
 # reachable by its service name (`gitea:3000`) on both Gitea Actions and GitHub
 # Actions — avoiding the host-vs-service-name networking difference between the
 # two platforms.
@@ -82,3 +82,47 @@ jobs:
       - name: Packaging tier
         if: matrix.highest
         run: npm run test:pack
+
+  # Builds the flake, catching flake rot — most concretely a build-relevant file
+  # left out of package.nix's source allowlist — at the commit that causes it,
+  # rather than weeks later at the maintainer's next system rebuild.
+  #
+  # `continue-on-error` is deliberate, not an oversight: this job is non-gating.
+  # Nix is not part of the runner image, so an infrastructure problem installing
+  # or reaching it must not block an otherwise legitimate change. Read its result
+  # as a signal, not as a verdict — a red mark here still merges.
+  #
+  # Its cost is likewise accepted rather than accidental. The flake's `checks`
+  # output aliases the package, so this builds the whole dependency closure from
+  # cold — nothing warms the store between runs — and re-runs the fast tier and
+  # the installed-binary tier inside the derivation, both of which the `test` job
+  # has already run. That duplication buys the allowlist guard, which nothing
+  # else provides.
+  flake:
+    runs-on: ubuntu-latest
+    # No `needs`: it neither waits on the test job nor is waited on, so the two
+    # run concurrently and neither can hold the other back.
+    #
+    # `continue-on-error` is set per step rather than on the job, which reads as
+    # the odd spelling but is the only one that works here: Gitea's `act` fork
+    # has the field on its Step struct and not on its Job struct, so a job-level
+    # flag is parsed and silently ignored, and a red build would fail the run
+    # after all. Step-level is honoured by both act and GitHub Actions, and a job
+    # whose every step is continue-on-error concludes green on either — so this
+    # spelling keeps the file portable as well as correct.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+        continue-on-error: true
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # `checks` is the package, so this builds exactly what `nix build` does,
+      # entered through the output a consumer would verify with — which also
+      # catches a `checks` output that has stopped evaluating.
+      - name: Check the flake (builds the package)
+        continue-on-error: true
+        run: nix flake check --print-build-logs

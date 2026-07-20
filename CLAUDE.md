@@ -65,3 +65,9 @@ Left alone it ships a stray cache in the closure and makes the output non-reprod
 nixpkgs 26.11 (the `nixos-unstable` the flake tracks) has **dropped `x86_64-darwin`**.
 `legacyPackages.x86_64-darwin` now *throws* rather than merely failing to build, so listing that system in the flake's `systems` breaks `nix flake show` and `nix flake check` for every system at once, not just that one.
 Intel macOS would need the 26.05 branch.
+
+Gitea Actions ignores **job-level `continue-on-error`**.
+Its `act` fork declares `RawContinueOnError` on the `Step` struct only — `pkg/model/workflow.go` has no such field on `Job` — so `jobs.<id>.continue-on-error` is parsed as an unknown key and silently dropped, and the job fails the run as if the flag were never written.
+Gitea's own syntax-comparison page does not list the gap.
+Put `continue-on-error` on each step instead: `act` and GitHub Actions both honour it there, and a job whose every step carries it concludes green on either platform.
+The same fork historically ignored `jobs.<id>.if` (go-gitea#25897), so treat any job-level key as needing a check against the fork's structs rather than against GitHub's documentation.
