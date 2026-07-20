@@ -36,8 +36,10 @@ Per [ADR 0001](.claude/adr/0001-diff-auth-via-tea-login-list.md) as amended, `sr
 The only bypass is the test hook requiring `GITEA_AXI_API_URL` + `GITEA_AXI_TOKEN` + `GITEA_AXI_REPO` together; there is no user-facing path that avoids `tea`, and `TEA_NOT_INSTALLED` exists for its absence.
 
 Neither `node`/`npm` nor `tea` is on the `PATH` in a non-interactive shell on this machine, and there is no `~/.gitconfig`.
-This is a NixOS host with no global Node install, and the repository has no dev shell yet (task 0039 adds one).
-Until then, prefix commands with `nix shell nixpkgs#nodejs -c ...`, adding `nixpkgs#tea` for anything that resolves credentials — including `gitea-axi pr create`.
+This is a NixOS host with no global Node install, so run work through the flake's dev shell: `nix develop --command <cmd>`, which carries Node, `git`, `tea`, and `curl` — enough for the build, the fast tier, the live end-to-end tier, and the benchmark harness's own runner.
+That covers anything resolving credentials, including `gitea-axi pr create`.
+The shell deliberately does *not* put `gitea-axi` on the `PATH`, so a live `bench:run` of the `gitea-axi` arm still needs the built binary exposed under that name itself — see the benchmark gotcha above.
+`nix shell nixpkgs#nodejs -c ...` still works for a one-off outside the repository, but inside it the dev shell is the declarative answer and pins the same Node the package is built against.
 `node_modules/` may be absent too, so `npm ci` first.
 Commits need an explicit identity: `git -c user.name=alexion -c user.email=contact@alexion.dev commit ...`, matching the existing history.
 

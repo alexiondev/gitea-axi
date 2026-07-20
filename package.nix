@@ -160,6 +160,12 @@ buildNpmPackage {
     runHook postInstallCheck
   '';
 
+  # The Node the package is built against, published as a declared interface
+  # rather than left to be read off the build environment. The flake's dev shell
+  # consumes exactly this, so the two cannot drift onto different majors — and
+  # this attribute is why that holds, so removing it breaks the shell.
+  passthru = { inherit nodejs; };
+
   meta = {
     inherit (manifest) description homepage;
 
