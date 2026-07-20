@@ -29,3 +29,8 @@ Always `git fetch origin` and cut a task branch from `origin/main`, not from wha
 Gitea's issue/PR search endpoint (`GET /repos/issues/search`, behind `search issues`/`search prs`) is backed by an **asynchronous, eventually-consistent issue indexer** (bleve by default).
 Content created moments earlier may not be searchable yet, so end-to-end assertions that create an issue/PR and then search for it must poll (e.g. `expect.poll`) until it is indexed rather than searching once.
 The fixture tier is unaffected — it stubs the endpoint — so this bites only the live `test/e2e` tier.
+
+`tea` is **still a runtime dependency**, despite [ADR 0002](.claude/adr/0002-direct-gitea-api-over-tea-subprocess.md) being titled "use direct Gitea API instead of wrapping the `tea` subprocess".
+That ADR moved *command dispatch* to `gitea-js`; it explicitly kept `tea` for **credential discovery**, and its own Consequences section says so.
+Per [ADR 0001](.claude/adr/0001-diff-auth-via-tea-login-list.md) as amended, `src/context.ts` resolves auth by shelling out to `tea login list --output json` (discovery) and `tea login helper get --login <name>` (token, with in-place OAuth refresh).
+The only bypass is the test hook requiring `GITEA_AXI_API_URL` + `GITEA_AXI_TOKEN` + `GITEA_AXI_REPO` together; there is no user-facing path that avoids `tea`, and `TEA_NOT_INSTALLED` exists for its absence.
