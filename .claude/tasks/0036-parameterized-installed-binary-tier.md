@@ -20,8 +20,30 @@ Nothing may assert on store paths, wrapper internals, or the arrangement of file
 
 ## Acceptance criteria
 
-- [ ] The installed-binary assertions live separately from the tarball-shape assertions, and both still run under the packaging tier's own runner configuration.
-- [ ] An environment variable naming an existing binary makes the installed-binary group drive that binary and skip pack-and-install.
-- [ ] With that variable unset, the group packs, installs, and drives the result as before — the default developer experience is unchanged.
-- [ ] The full packaging tier passes in both modes.
-- [ ] No assertion in the installed-binary group depends on how the binary was installed.
+- [x] The installed-binary assertions live separately from the tarball-shape assertions, and both still run under the packaging tier's own runner configuration.
+- [x] An environment variable naming an existing binary makes the installed-binary group drive that binary and skip pack-and-install.
+- [x] With that variable unset, the group packs, installs, and drives the result as before — the default developer experience is unchanged.
+- [x] The full packaging tier passes in both modes.
+- [x] No assertion in the installed-binary group depends on how the binary was installed.
+
+## Implementation Notes
+
+`test/packaging/packaging.test.ts` split into `tarball.test.ts` and `installed-binary.test.ts`, with the shared `npm pack` / extract / global-install mechanics factored into a non-test `npm-artifact.ts` module beside them.
+The runner configuration is untouched apart from its comments: its `include` glob already matched the whole directory, so both new files run under it unchanged.
+
+The environment variable is `GITEA_AXI_INSTALLED_BIN`, matching the existing `GITEA_AXI_*` convention.
+An empty value counts as unset, so exporting it blank behaves the same as not exporting it.
+A path that does not exist fails in `beforeAll` with an explanatory message rather than letting every assertion fail on an opaque spawn `ENOENT`.
+
+Two deviations from the plan, both minor and both deliberate:
+
+The single `it` that drove the installed binary became three — usage, dashboard render, and Agent Skill installation.
+The task said the assertions "do not change in character", and they do not; this only splits one case into the three behaviours the spec itself names ("the binary runs, renders, and installs its Agent Skill"), so a failure names which one broke.
+
+`PUBLISHING.md`'s "Verifying the packed artifact" section was rewritten to describe the two facets and document the new variable.
+Not an acceptance criterion, but the section described the tier as one undifferentiated thing and would otherwise have been left stale by this change.
+
+Verified by running the full tier three ways: with the variable unset (both facets pack as before), with it pointing at a separately installed binary (the installed-binary facet skipped its setup — 2.2s down to 0.3s, with no `prepack` build), and with it set to the empty string (falls back to pack-and-install).
+
+One consequence worth flagging for task 0038: the two facets now each run `npm pack`, so `npm run test:pack` builds twice.
+That is invisible to the Nix build, which will run only `test/packaging/installed-binary.test.ts` against its own installed output rather than the full tier.

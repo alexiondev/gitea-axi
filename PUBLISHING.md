@@ -28,7 +28,8 @@ Bump the version first with `npm version <patch|minor|major>`, which updates `pa
 
 ## Verifying the packed artifact
 
-The packaging smoke test packs the real tarball, installs it globally into a throwaway prefix, and drives the installed binary — `--help`, the dashboard header, and `setup` finding the bundled skill:
+The packaging smoke test comes in two facets: one asserts the shape of the packed tarball and its manifest, the other drives an installed binary — `--help`, the dashboard header, and `setup` finding the bundled skill.
+By default it packs the real tarball and installs it globally into a throwaway prefix to produce that binary:
 
 ```sh
 npm run test:pack
@@ -36,3 +37,7 @@ npm run test:pack
 
 It builds, packs, and fetches the runtime dependencies from the registry, so it is slower than the unit and integration tiers and is not part of the default `npm test` run.
 Distribution touches no Gitea API, so this smoke test is the distribution analogue of the live-Gitea end-to-end tier.
+
+The two facets are `test/packaging/tarball.test.ts`, which is npm-specific by nature, and `test/packaging/installed-binary.test.ts`, which asserts what any *installed* gitea-axi must do, whatever installed it.
+That second facet is therefore also the check a non-npm installation path runs against its own output.
+Set `GITEA_AXI_INSTALLED_BIN` to the path of an already-installed binary to have it drive that one and skip the pack-and-install setup.
