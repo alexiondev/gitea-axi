@@ -216,14 +216,18 @@ That test is what splits the two installation methods, and the split is a proper
 So the preference for the bare name is real, but it is unreachable through any wrapper-based install.
 It is not that Nix was overlooked; it is that the mechanism keys on a filesystem relationship only the symlink shape has.
 
-The mitigation is therefore documentation, per the decision recorded when this item was opened: the `setup` command's help text states that `setup hooks` must be re-run after an upgrade.
-The failure it guards against is silent — a session-start hook that cannot execute simply does not run, so a user gets no error, only the quiet absence of their ambient dashboard.
+The first mitigation was documentation: the `setup` command's help text stated that `setup hooks` must be re-run after an upgrade.
+The failure it guarded against is silent — a session-start hook that cannot execute simply does not run, so a user gets no error, only the quiet absence of their ambient dashboard.
 
-Changing the `setup` command to prefer the bare name remains a separate task with its own ADR, justified on the grounds that a stable search-path name is more robust for *every* installation method, and explicitly not as a special case that detects Nix store paths in application code.
-Two findings feed that future task.
-First, the mitigation above is documentation against a silent failure, which is the weakest kind of fix.
-Second, a related defect shares the same line: `isManagedHook` recognises its own hook by testing whether the recorded command string *contains* the marker `gitea-axi`, so an entrypoint path lacking that substring makes `setup hooks` append a duplicate rather than update in place, contradicting the idempotency its help text promises.
-That coupling is why `package.nix` renames its build tree in `postUnpack`; the rename can be deleted once the hook no longer depends on the entrypoint path.
+**Task 0043 superseded that mitigation and this section's conclusion.**
+The preference for the bare name is reachable through a wrapper-based install after all; it was only being reached for from the wrong end.
+`setup hooks` now resolves `gitea-axi` on `PATH` the way a shell does and hands *that* location to the SDK, so the realpath comparison succeeds and the bare name is recorded — under Nix as under npm.
+The absolute path survives as the fallback for a binary that is not on `PATH` at all.
+The reasoning is recorded in [ADR 0019](../adr/0019-hook-records-search-path-name.md); the help text's re-run instruction is gone, having become false.
+
+The related defect on the same line went with it: `isManagedHook` recognises its own hook by testing whether the recorded command string *contains* the marker `gitea-axi`, so an entrypoint path lacking that substring made `setup hooks` append a duplicate rather than update in place.
+`setup hooks` now prunes duplicates itself, recognising its entry by the exact command it records rather than by a substring of it.
+That coupling was why `package.nix` renamed its build tree in `postUnpack`; the rename is deleted, and the build running green from `/build/source` is what demonstrates the coupling is gone.
 
 ### Verified during design
 

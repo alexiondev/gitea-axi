@@ -60,25 +60,6 @@ buildNpmPackage {
 
   nativeBuildInputs = [ makeWrapper ];
 
-  # The builder would otherwise unpack to a generic `source` directory, which no
-  # real installation resembles: under npm the tree lives at
-  # `node_modules/gitea-axi`, under Nix at `…-gitea-axi-<version>/…`. The fast
-  # tier's `setup hooks` test is sensitive to the difference, because the SDK
-  # records the entrypoint's absolute path and recognises its own managed hook by
-  # finding "gitea-axi" within it. Naming the tree makes the build representative
-  # rather than an environment no operator ever has.
-  #
-  # This coupling is a defect, not a property worth preserving. Task 0042
-  # verified the resolution behaviour and documented the mitigation, but left
-  # the hook's dependence on the entrypoint path in place: removing it needs its
-  # own ADR, since a stable search-path name is the right answer for every
-  # installation method and not a Nix special case. This rename goes away with
-  # that task, not before.
-  postUnpack = ''
-    mv "$sourceRoot" gitea-axi
-    export sourceRoot=gitea-axi
-  '';
-
   # The fast tier only. The live end-to-end and benchmark smoke tiers need a
   # live Gitea host. Two of these test files invoke `git` directly and one
   # resolves it with `which`; `tea` is already stubbed within this tier.

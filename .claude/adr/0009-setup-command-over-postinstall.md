@@ -28,3 +28,7 @@ gitea-axi adds the same opt-in `setup hooks`; the skill remains the default `set
 
 Hooks are not the default because the hook runs the dashboard in every session in every directory, and outside a Gitea repo the dashboard errors with `REPO_NOT_FOUND` — a graceful exit-0 degradation was considered and rejected in favor of keeping the error explicit, so hook noise in non-Gitea sessions is an accepted consequence for users who opt in.
 The SDK registers the bare binary as the hook command, so the hook always runs the short dashboard tier (see ADR 0012).
+
+**Amended by [ADR 0019](0019-hook-records-search-path-name.md):** that last sentence held only for npm installs.
+The SDK records the bare name only when a `PATH` entry realpath-matches the entrypoint it is handed, which npm's symlinked `bin` satisfies and a wrapper-based install cannot.
+`setup hooks` now resolves the binary on `PATH` itself and hands that location over, so the bare name is recorded for wrapper-based installs too; the absolute entrypoint path remains the fallback when the name resolves to no install of ours.

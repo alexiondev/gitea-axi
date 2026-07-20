@@ -72,8 +72,13 @@ Gitea's own syntax-comparison page does not list the gap.
 Put `continue-on-error` on each step instead: `act` and GitHub Actions both honour it there, and a job whose every step carries it concludes green on either platform.
 The same fork historically ignored `jobs.<id>.if` (go-gitea#25897), so treat any job-level key as needing a check against the fork's structs rather than against GitHub's documentation.
 
-The session-start hook installed by `setup hooks` records the entrypoint's **absolute path**, not the bare binary name, on every wrapper-based install.
-`resolvePortableHookCommand` in `axi-sdk-js` returns the bare name only when a `PATH` entry *realpath-matches* the entrypoint.
-npm symlinks its `bin` entry straight at `dist/main.js`, so that match succeeds; Nix installs a generated wrapper script that invokes `node <path>`, whose realpath is the wrapper, so the match cannot succeed and the store path is recorded.
-Passing `binaryNames` therefore does not make the hook portable under Nix — verify by driving the installed binary and reading `~/.claude/settings.json`, not by reading the SDK's interface.
-The consequence is silent: a hook whose recorded path no longer exists does not run and does not warn.
+`resolvePortableHookCommand` in `axi-sdk-js` returns the bare binary name only when a `PATH` entry *realpath-matches* the **`execPath` it is handed**, and the absolute path otherwise.
+Passing `binaryNames` does not by itself make the hook portable: npm symlinks its `bin` entry straight at `dist/main.js` so the match succeeds there, but a wrapper-based install (Nix, a shim, a generated `.cmd`) never can, because a script that *invokes* a file does not resolve *to* it.
+Per [ADR 0019](.claude/adr/0019-hook-records-search-path-name.md), `setup hooks` therefore resolves `gitea-axi` on `PATH` itself and hands *that* location over, which makes the match succeed and the bare name get recorded.
+It only accepts a `PATH` entry that resolves to the running entrypoint — a symlink to it, or a wrapper naming it in its text — so a same-named binary that is some other program falls through to the absolute-path fallback, as does a name that is not on `PATH` at all.
+It reads `PATH` from `process.env`, not from the injected `deps.env`, because it has to agree with the SDK's own probing — so a test that wants to steer this has to set `process.env.PATH`.
+Verify hook behaviour by driving the installed binary and reading `~/.claude/settings.json`, not by reading the SDK's interface; a hook whose recorded path no longer exists does not run and does not warn.
+
+The SDK's `isManagedHook` recognises its own hook by testing whether the recorded command *contains* the marker, so it appends a duplicate instead of updating in place whenever the recorded command lacks the substring `gitea-axi`.
+`setup hooks` compensates by pruning duplicates itself after the SDK writes.
+This is why `package.nix` no longer needs to rename its build tree: the fast tier runs from `/build/source`, whose path has no marker in it, and the idempotency test passes there.

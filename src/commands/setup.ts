@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { installSessionStartHooks } from "axi-sdk-js";
 import type { CliDeps } from "../deps.js";
 import { axiError } from "../errors.js";
+import { pruneDuplicateManagedHooks, resolveEntrypointOnPath } from "../hooks.js";
 import { renderDetail } from "../render.js";
 
 export const SETUP_HELP = `usage: gitea-axi setup [hooks]
@@ -18,14 +19,6 @@ Install gitea-axi's ambient context for agent sessions.
 Both are idempotent: re-running updates the managed files in place rather than
 failing. There is no postinstall script — installation is always explicit.
 
-Re-run "setup hooks" after upgrading gitea-axi. The hook records an absolute
-path to the entrypoint, which moves when the install location changes, and a
-session-start hook that cannot be executed fails silently rather than warning.
-This matters most for immutable installs such as Nix, where every rebuild lands
-the entrypoint at a fresh path and the old one is eventually collected. When the
-path moves, the re-run may leave the stale entry behind instead of replacing it;
-remove it by hand if a duplicate appears.
-
 flags:
   --help           Show this help
 `;
@@ -37,6 +30,11 @@ flags:
 const SKILL_NAME = "gitea-axi";
 const SKILL_SOURCE = new URL("../../skills/gitea-axi/SKILL.md", import.meta.url);
 const EXEC_PATH = fileURLToPath(new URL("../main.js", import.meta.url));
+
+// The same string as SKILL_NAME, kept apart because it names a different thing:
+// the executable as it is spelled on PATH, which is what the SessionStart hook
+// records. They are free to diverge; the SDK's marker follows the skill.
+const BINARY_NAME = "gitea-axi";
 
 const HOOK_INTEGRATIONS = ["Claude Code", "Codex", "OpenCode"];
 
@@ -93,13 +91,66 @@ async function setupSkill(deps: CliDeps): Promise<string> {
   });
 }
 
+// The two files the SDK writes the SessionStart hook array into. Its third
+// integration, OpenCode, is a whole plugin file it rewrites wholesale behind
+// its own managed marker, so that one cannot accumulate duplicates.
+const HOOK_SETTINGS_FILES = [
+  [".claude", "settings.json"],
+  [".codex", "hooks.json"],
+];
+
+/**
+ * Collapse any duplicate managed entry the SDK's own recognition missed.
+ *
+ * It identifies its hook by finding the marker inside the recorded command, so
+ * an entrypoint path that does not happen to contain "gitea-axi" makes a re-run
+ * append a second entry rather than update the first. Matching the exact
+ * command this run records makes idempotency independent of the recorded
+ * command's shape — and cannot mistake another tool's hook for ours the way a
+ * substring test can.
+ */
+function pruneHookSettingsFiles(home: string, command: string, errors: string[]): void {
+  const isManaged = (recorded: string) => recorded === command;
+
+  for (const segments of HOOK_SETTINGS_FILES) {
+    const target = join(home, ...segments);
+    if (!existsSync(target)) {
+      continue;
+    }
+    try {
+      const current = JSON.parse(readFileSync(target, "utf8"));
+      const { settings, changed } = pruneDuplicateManagedHooks(current, isManaged);
+      if (changed) {
+        writeFileSync(target, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+      }
+    } catch (error) {
+      errors.push(`${target}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+}
+
 async function setupHooks(deps: CliDeps): Promise<string> {
   const home = resolveHome(deps);
   const errors: string[] = [];
+
+  // ADR 0019: record a search-path name, not an install-tree path. Handing the
+  // SDK where the binary resolves on PATH — rather than the module-relative
+  // entrypoint — is what lets its realpath test succeed for a wrapper-based
+  // install, so it records the bare, upgrade-stable name. When the name
+  // resolves to no wrapper or symlink of ours, the entrypoint stands as the
+  // fallback and the absolute path is recorded exactly as before.
+  //
+  // PATH is read from the process rather than the injected environment on
+  // purpose: it has to be the same PATH the SDK itself probes, and the SDK
+  // reads its own.
+  const onPath = resolveEntrypointOnPath(BINARY_NAME, EXEC_PATH, process.env.PATH);
+  const execPath = onPath ?? EXEC_PATH;
+  const command = onPath ? BINARY_NAME : EXEC_PATH;
+
   installSessionStartHooks({
     marker: SKILL_NAME,
     binaryNames: [SKILL_NAME],
-    execPath: EXEC_PATH,
+    execPath,
     homeDir: home,
     // This is an explicit user command, so install unconditionally rather than
     // deferring to the SDK's auto-install safety gate (which is tuned for the
@@ -107,6 +158,8 @@ async function setupHooks(deps: CliDeps): Promise<string> {
     shouldInstall: () => true,
     onError: (message) => errors.push(message),
   });
+
+  pruneHookSettingsFiles(home, command, errors);
 
   if (errors.length > 0) {
     throw axiError(`Failed to install session hooks: ${errors.join("; ")}`, "UNKNOWN");

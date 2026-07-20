@@ -1,8 +1,9 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, isAbsolute, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { runCliTest } from "./harness.js";
+import { type CliResult, runCliTest } from "./harness.js";
 
 let tempHome: string;
 
@@ -11,6 +12,46 @@ afterEach(() => {
     rmSync(tempHome, { recursive: true, force: true });
   }
 });
+
+/**
+ * Run `body` with `process.env.PATH` replaced. `setup hooks` reads PATH from the
+ * process rather than the injected environment, because it has to agree with
+ * the agent SDK's own probing — so this is the seam that decides whether the
+ * recorded hook command is the bare name or the absolute entrypoint path.
+ */
+async function withPath(path: string, body: () => Promise<CliResult>): Promise<CliResult> {
+  const original = process.env.PATH;
+  process.env.PATH = path;
+  try {
+    return await body();
+  } finally {
+    process.env.PATH = original;
+  }
+}
+
+/**
+ * The entrypoint `setup hooks` resolves for itself — `src/main.js` here, since
+ * the dist layout mirrors src/ and setup.ts locates it relative to its own
+ * module.
+ */
+function entrypointPath(): string {
+  return fileURLToPath(new URL("../src/main.js", import.meta.url));
+}
+
+/** Write an executable `gitea-axi` into a fresh `dir`, and return that dir. */
+function writeFakeBinary(dir: string, contents: string): string {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "gitea-axi"), contents, { mode: 0o755 });
+  return dir;
+}
+
+/** The single command string recorded in the Claude Code SessionStart hook. */
+function recordedHookCommand(home: string): string {
+  const settings = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8"));
+  expect(settings.hooks.SessionStart).toHaveLength(1);
+  expect(settings.hooks.SessionStart[0].hooks).toHaveLength(1);
+  return settings.hooks.SessionStart[0].hooks[0].command;
+}
 
 describe("setup", () => {
   it("installs the skill and is idempotent: installed -> unchanged -> updated", async () => {
@@ -85,6 +126,58 @@ describe("setup hooks", () => {
     const claudeSettings = JSON.parse(readFileSync(claudeSettingsPath, "utf8"));
     expect(claudeSettings.hooks.SessionStart).toHaveLength(1);
     expect(claudeSettings.hooks.SessionStart[0].hooks).toHaveLength(1);
+  });
+
+  it("records the bare binary name when a wrapper on PATH runs this entrypoint", async () => {
+    tempHome = mkdtempSync(join(tmpdir(), "gitea-axi-setup-"));
+
+    // A wrapper-based install in miniature — a script that *invokes* the
+    // entrypoint, so its realpath is itself and the SDK could never match it
+    // from the entrypoint's side. This is the shape Nix installs.
+    const binDir = writeFakeBinary(
+      join(tempHome, "wrapper"),
+      `#!/bin/sh\nexec node ${entrypointPath()} "$@"\n`,
+    );
+
+    const { exitCode } = await withPath(`${binDir}${delimiter}${process.env.PATH ?? ""}`, () =>
+      runCliTest(["setup", "hooks"], { env: { HOME: tempHome } }),
+    );
+    expect(exitCode).toBe(0);
+
+    expect(recordedHookCommand(tempHome)).toBe("gitea-axi");
+  });
+
+  it("falls back to the absolute entrypoint path when gitea-axi is not on PATH", async () => {
+    tempHome = mkdtempSync(join(tmpdir(), "gitea-axi-setup-"));
+    const emptyDir = join(tempHome, "empty");
+    mkdirSync(emptyDir, { recursive: true });
+
+    const { exitCode } = await withPath(emptyDir, () =>
+      runCliTest(["setup", "hooks"], { env: { HOME: tempHome } }),
+    );
+    expect(exitCode).toBe(0);
+
+    const command = recordedHookCommand(tempHome);
+    expect(isAbsolute(command)).toBe(true);
+    expect(command).toBe(entrypointPath());
+  });
+
+  it("falls back rather than recording a name for some unrelated gitea-axi", async () => {
+    tempHome = mkdtempSync(join(tmpdir(), "gitea-axi-setup-"));
+
+    // Same name on PATH, different program. Recording the bare name here would
+    // point the hook at a binary the user never asked to install.
+    const binDir = writeFakeBinary(
+      join(tempHome, "impostor"),
+      "#!/bin/sh\nexec node /somewhere/else/dist/main.js \"$@\"\n",
+    );
+
+    const { exitCode } = await withPath(binDir, () =>
+      runCliTest(["setup", "hooks"], { env: { HOME: tempHome } }),
+    );
+    expect(exitCode).toBe(0);
+
+    expect(recordedHookCommand(tempHome)).toBe(entrypointPath());
   });
 });
 
