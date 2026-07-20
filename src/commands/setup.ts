@@ -4,7 +4,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { installSessionStartHooks } from "axi-sdk-js";
 import type { CliDeps } from "../deps.js";
-import { axiError } from "../errors.js";
+import {
+  axiError,
+  isNotWritableError,
+  isNotWritableMessage,
+  unwritableTargetError,
+} from "../errors.js";
 import { pruneDuplicateManagedHooks, resolveEntrypointOnPath } from "../hooks.js";
 import { renderDetail } from "../render.js";
 
@@ -65,15 +70,30 @@ function installSkill(home: string): { skill: string; path: string; status: Skil
   const targetPath = join(targetDir, "SKILL.md");
 
   let status: SkillStatus;
-  if (!existsSync(targetPath)) {
-    status = "installed";
-  } else {
-    status = readFileSync(targetPath, "utf8") === source ? "unchanged" : "updated";
-  }
+  try {
+    if (!existsSync(targetPath)) {
+      status = "installed";
+    } else {
+      status = readFileSync(targetPath, "utf8") === source ? "unchanged" : "updated";
+    }
 
-  if (status !== "unchanged") {
-    mkdirSync(targetDir, { recursive: true });
-    writeFileSync(targetPath, source, "utf8");
+    // A target that already holds these bytes needs no write, so its being
+    // read-only is beside the point and the run succeeds.
+    if (status !== "unchanged") {
+      mkdirSync(targetDir, { recursive: true });
+      writeFileSync(targetPath, source, "utf8");
+    }
+  } catch (error) {
+    // The comparison read is inside the guard because a target the filesystem
+    // will not let us read is one it will not let us replace either — the same
+    // condition, reached one call earlier.
+    if (isNotWritableError(error)) {
+      // The path the filesystem names is the directory when it is the directory
+      // that is read-only, so report that rather than assuming the file.
+      const blocked = (error as { path?: string }).path ?? targetPath;
+      throw unwritableTargetError(blocked, `the ${SKILL_NAME} skill`);
+    }
+    throw error;
   }
 
   return { skill: SKILL_NAME, path: collapseHome(targetPath, home), status };
@@ -99,6 +119,38 @@ const HOOK_SETTINGS_FILES = [
   [".codex", "hooks.json"],
 ];
 
+/** One target the hook install could not write, and why. */
+interface TargetFailure {
+  /** The file being written when it failed. */
+  path: string;
+  /** The underlying failure, with no path spliced into it. */
+  detail: string;
+}
+
+/**
+ * Recover a {@link TargetFailure} from the agent SDK's reporting.
+ *
+ * It hands its failures to `onError` as `<path>: <message>` text rather than as
+ * errors, so the two halves have to be separated again before either can be
+ * judged on its own. Text in that shape is all it ever emits; anything else is
+ * returned whole as the detail, with no path to attribute it to.
+ */
+function parseReportedFailure(reported: string): TargetFailure {
+  const separator = reported.indexOf(": ");
+  if (separator === -1) {
+    return { path: "", detail: reported };
+  }
+  return {
+    path: reported.slice(0, separator),
+    detail: reported.slice(separator + 2),
+  };
+}
+
+/** A failure rendered back as the `<path>: <detail>` line a reader sees. */
+function formatFailure({ path, detail }: TargetFailure): string {
+  return path === "" ? detail : `${path}: ${detail}`;
+}
+
 /**
  * Collapse any duplicate managed entry the SDK's own recognition missed.
  *
@@ -109,7 +161,11 @@ const HOOK_SETTINGS_FILES = [
  * command's shape — and cannot mistake another tool's hook for ours the way a
  * substring test can.
  */
-function pruneHookSettingsFiles(home: string, command: string, errors: string[]): void {
+function pruneHookSettingsFiles(
+  home: string,
+  command: string,
+  errors: TargetFailure[],
+): void {
   const isManaged = (recorded: string) => recorded === command;
 
   for (const segments of HOOK_SETTINGS_FILES) {
@@ -124,14 +180,17 @@ function pruneHookSettingsFiles(home: string, command: string, errors: string[])
         writeFileSync(target, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
       }
     } catch (error) {
-      errors.push(`${target}: ${error instanceof Error ? error.message : String(error)}`);
+      errors.push({
+        path: target,
+        detail: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 }
 
 async function setupHooks(deps: CliDeps): Promise<string> {
   const home = resolveHome(deps);
-  const errors: string[] = [];
+  const errors: TargetFailure[] = [];
 
   // ADR 0019: record a search-path name, not an install-tree path. Handing the
   // SDK where the binary resolves on PATH — rather than the module-relative
@@ -156,13 +215,25 @@ async function setupHooks(deps: CliDeps): Promise<string> {
     // deferring to the SDK's auto-install safety gate (which is tuned for the
     // inferred dist/bin/<name>.js entrypoint layout gitea-axi does not use).
     shouldInstall: () => true,
-    onError: (message) => errors.push(message),
+    onError: (message) => errors.push(parseReportedFailure(message)),
   });
 
   pruneHookSettingsFiles(home, command, errors);
 
   if (errors.length > 0) {
-    throw axiError(`Failed to install session hooks: ${errors.join("; ")}`, "UNKNOWN");
+    // A read-only target is the most actionable thing that can be in here — it
+    // names something the user must settle elsewhere rather than a bug — so it
+    // is reported ahead of whatever else was collected.
+    const unwritable = errors.find(
+      (failure) => failure.path !== "" && isNotWritableMessage(failure.detail),
+    );
+    if (unwritable) {
+      throw unwritableTargetError(unwritable.path, `the ${SKILL_NAME} session hook`);
+    }
+    throw axiError(
+      `Failed to install session hooks: ${errors.map(formatFailure).join("; ")}`,
+      "UNKNOWN",
+    );
   }
 
   return renderDetail({

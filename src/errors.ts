@@ -10,6 +10,7 @@ export type AxiErrorCode =
   | "TEA_NOT_INSTALLED"
   | "VALIDATION_ERROR"
   | "GIT_ERROR"
+  | "TARGET_NOT_WRITABLE"
   | "UNKNOWN";
 
 export function axiError(
@@ -18,6 +19,50 @@ export function axiError(
   suggestions: string[] = [],
 ): AxiError {
   return new AxiError(message, code, suggestions);
+}
+
+// The three ways a filesystem refuses a write for reasons the user must settle
+// outside this tool: the permission bits deny it, the file is flagged immutable
+// or otherwise protected, or the filesystem itself is mounted read-only.
+const NOT_WRITABLE_ERRNOS = ["EACCES", "EPERM", "EROFS"];
+
+/** Whether a caught filesystem error means the target cannot be written. */
+export function isNotWritableError(error: unknown): boolean {
+  const errno = (error as { code?: unknown } | null)?.code;
+  return typeof errno === "string" && NOT_WRITABLE_ERRNOS.includes(errno);
+}
+
+/**
+ * The same judgement made from an error's *message*, for a caller handed the
+ * formatted text rather than the error object.
+ *
+ * This takes the message alone, never a string the target's path has been
+ * spliced into: a path is the user's to name, and one that happened to contain
+ * `EACCES` would otherwise misreport an unrelated failure as a read-only target.
+ */
+export function isNotWritableMessage(message: string): boolean {
+  return NOT_WRITABLE_ERRNOS.some((errno) => message.includes(errno));
+}
+
+/**
+ * A read-only target reported as something the user can act on.
+ *
+ * The remedy is deliberately general. Read-only is not diagnostic of any
+ * particular configuration manager, and every plausible cause — a declarative
+ * home manager, an immutable flag, a root-owned path — has the same answer:
+ * whatever renders the file read-only is where this belongs, not here.
+ *
+ * `subject` names what the caller was installing, for the remedy line.
+ */
+export function unwritableTargetError(path: string, subject: string): AxiError {
+  return axiError(
+    `Cannot write ${path}: it is not writable, so it appears to be managed by another tool`,
+    "TARGET_NOT_WRITABLE",
+    [
+      `Declare ${subject} through that tool's configuration rather than installing it with this command`,
+      `Or make ${path} writable and re-run`,
+    ],
+  );
 }
 
 interface HttpResponseLike {

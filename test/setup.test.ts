@@ -1,4 +1,13 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,11 +16,48 @@ import { type CliResult, runCliTest } from "./harness.js";
 
 let tempHome: string;
 
+/** Restore write permission everywhere under `dir` so the tree can be removed. */
+function restorePermissions(dir: string): void {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    chmodSync(path, entry.isDirectory() ? 0o700 : 0o600);
+    if (entry.isDirectory()) {
+      restorePermissions(path);
+    }
+  }
+}
+
 afterEach(() => {
-  if (tempHome) {
+  // Not every test creates a HOME, so this may be a directory an earlier test
+  // already removed.
+  if (tempHome && existsSync(tempHome)) {
+    // The read-only-target tests leave files and directories unwritable, and
+    // an unwritable directory cannot have its entries unlinked.
+    chmodSync(tempHome, 0o700);
+    restorePermissions(tempHome);
     rmSync(tempHome, { recursive: true, force: true });
   }
+  tempHome = "";
 });
+
+/**
+ * Permission bits are not enforced for root, so the read-only-target tests
+ * cannot express their premise there and are skipped rather than passing
+ * vacuously.
+ */
+const itUnlessRoot = process.getuid?.() === 0 ? it.skip : it;
+
+/**
+ * Assert the error's wording infers no particular configuration manager.
+ *
+ * Read-only is not diagnostic of one, so naming one would be wrong for most
+ * readers who hit this. The paths the error quotes are exempt — they are the
+ * user's own, and here the temp directory sits under a `nix-shell` TMPDIR.
+ */
+function expectNamesNoManager(stdout: string, home: string): void {
+  const wording = stdout.split(home).join("<home>");
+  expect(wording).not.toMatch(/\b(nix|home-manager|nixos|chezmoi|ansible|stow|guix)\b/i);
+}
 
 /**
  * Run `body` with `process.env.PATH` replaced. `setup hooks` reads PATH from the
@@ -77,6 +123,60 @@ describe("setup", () => {
     expect(third.exitCode).toBe(0);
     expect(third.stdout).toContain("status: updated");
     expect(readFileSync(installedPath, "utf8")).not.toBe("tampered");
+  });
+
+  itUnlessRoot("reports a read-only skill target as a structured error", async () => {
+    tempHome = mkdtempSync(join(tmpdir(), "gitea-axi-setup-"));
+    const installedPath = join(tempHome, ".claude", "skills", "gitea-axi", "SKILL.md");
+
+    // A declaratively managed install in miniature: the file is present, its
+    // content differs from the bundled copy, and it cannot be written.
+    mkdirSync(join(tempHome, ".claude", "skills", "gitea-axi"), { recursive: true });
+    writeFileSync(installedPath, "managed elsewhere\n");
+    chmodSync(installedPath, 0o444);
+
+    const { stdout, exitCode } = await runCliTest(["setup"], { env: { HOME: tempHome } });
+
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("code: TARGET_NOT_WRITABLE");
+    expect(stdout).toContain(installedPath);
+    expect(stdout).toContain("managed by another tool");
+    expectNamesNoManager(stdout, tempHome);
+    // The bundled copy is untouched by a failed run.
+    expect(readFileSync(installedPath, "utf8")).toBe("managed elsewhere\n");
+  });
+
+  itUnlessRoot("names the directory when it is the directory that is read-only", async () => {
+    tempHome = mkdtempSync(join(tmpdir(), "gitea-axi-setup-"));
+    const skillsDir = join(tempHome, ".claude", "skills");
+
+    // Nothing installed yet, and no new entry can be created here — so the
+    // blocked path is the directory, not the file that would have gone in it.
+    mkdirSync(skillsDir, { recursive: true });
+    chmodSync(skillsDir, 0o555);
+
+    const { stdout, exitCode } = await runCliTest(["setup"], { env: { HOME: tempHome } });
+
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("code: TARGET_NOT_WRITABLE");
+    expect(stdout).toContain(join(skillsDir, "gitea-axi"));
+    expectNamesNoManager(stdout, tempHome);
+  });
+
+  itUnlessRoot("succeeds on a read-only skill target that is already up to date", async () => {
+    tempHome = mkdtempSync(join(tmpdir(), "gitea-axi-setup-"));
+    const installedPath = join(tempHome, ".claude", "skills", "gitea-axi", "SKILL.md");
+
+    const first = await runCliTest(["setup"], { env: { HOME: tempHome } });
+    expect(first.exitCode).toBe(0);
+
+    // Same bytes the command would write, so there is nothing to write and the
+    // target's being read-only is beside the point.
+    chmodSync(installedPath, 0o444);
+
+    const { stdout, exitCode } = await runCliTest(["setup"], { env: { HOME: tempHome } });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("status: unchanged");
   });
 });
 
@@ -178,6 +278,25 @@ describe("setup hooks", () => {
     expect(exitCode).toBe(0);
 
     expect(recordedHookCommand(tempHome)).toBe(entrypointPath());
+  });
+
+  itUnlessRoot("reports a read-only hook target as the same structured error", async () => {
+    tempHome = mkdtempSync(join(tmpdir(), "gitea-axi-setup-"));
+    const settingsPath = join(tempHome, ".claude", "settings.json");
+
+    mkdirSync(join(tempHome, ".claude"), { recursive: true });
+    writeFileSync(settingsPath, "{}\n");
+    chmodSync(settingsPath, 0o444);
+
+    const { stdout, exitCode } = await runCliTest(["setup", "hooks"], {
+      env: { HOME: tempHome },
+    });
+
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("code: TARGET_NOT_WRITABLE");
+    expect(stdout).toContain(settingsPath);
+    expect(stdout).toContain("managed by another tool");
+    expectNamesNoManager(stdout, tempHome);
   });
 });
 

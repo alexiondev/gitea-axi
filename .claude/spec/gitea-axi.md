@@ -491,7 +491,7 @@ The dashboard's empty states are `prs: 0 open` / `issues: 0 open` (raw strings, 
 Empty output is never silent.
 
 **Principle 6 — Structured errors, exit codes, idempotent mutations, no prompts.**
-Errors are represented as a typed `AxiError` with one of ten named codes: `REPO_NOT_FOUND`, `ISSUE_NOT_FOUND`, `PR_NOT_FOUND`, `AUTH_REQUIRED`, `FORBIDDEN`, `RATE_LIMITED`, `TEA_NOT_INSTALLED`, `VALIDATION_ERROR`, `GIT_ERROR`, `UNKNOWN`.
+Errors are represented as a typed `AxiError` with one of eleven named codes: `REPO_NOT_FOUND`, `ISSUE_NOT_FOUND`, `PR_NOT_FOUND`, `AUTH_REQUIRED`, `FORBIDDEN`, `RATE_LIMITED`, `TEA_NOT_INSTALLED`, `VALIDATION_ERROR`, `GIT_ERROR`, `TARGET_NOT_WRITABLE`, `UNKNOWN`.
 The `ISSUE_NOT_FOUND`/`PR_NOT_FOUND` split (vs gh-axi's single `NOT_FOUND`) is a deliberate divergence enabled by path-based 404 classification.
 API error responses are classified by HTTP status code and calling context:
 
@@ -516,6 +516,8 @@ tea has logins but none match the detected hostname → `REPO_NOT_FOUND` (the re
 HTTP 401 from the API → `AUTH_REQUIRED` (token invalid or revoked), per the status table.
 A `--login` value naming a nonexistent profile is `VALIDATION_ERROR`, listing the available profile names.
 `GIT_ERROR` classifies non-zero git subprocess exits (currently only `pr checkout`), carrying git's first stderr line.
+`TARGET_NOT_WRITABLE` classifies a `setup` target the filesystem refuses (`EACCES`, `EPERM`, `EROFS`), naming the file and pointing at the general remedy: it appears to be managed by another tool, so the skill or hook belongs in that tool's configuration.
+It never names or infers a particular configuration manager — read-only is not diagnostic of one.
 Error output is TOON-encoded to stdout (not stderr): `error: <message>`, `code: <CODE>`, and optionally `help[N]:` with suggestion lines.
 The suggestions field is named `help`, not `hint`.
 Exit codes: 0 success, 1 error, 2 for `VALIDATION_ERROR` — covering unknown flags, missing required inputs, and server-side 422 rejections alike (the `axi-sdk-js` `exitCodeForError` mapping; see ADR 0004).
