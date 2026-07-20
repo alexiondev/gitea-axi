@@ -46,16 +46,19 @@ Alongside the flake, the continuous integration workflow moves off end-of-life N
 
 ### Flake surface
 
-The flake exposes a package, a development shell, and a checks output.
+The flake exposes a package, a development shell, a checks output, and a home-manager module.
 It deliberately exposes no NixOS module and no overlay.
 
 A NixOS module was rejected because gitea-axi is a stateless CLI with no daemon and no system-level configuration; a module would wrap the system package set and nothing else.
 An overlay was rejected as an interface with no consumer — the maintainer is the sole consumer and already knows the package goes into the system package set.
 Both remain purely additive to add later.
 
-A home-manager module is explicitly deferred rather than rejected.
-The one piece of per-user state is the Agent Skill that the `setup` command installs, and a module managing it declaratively would reintroduce exactly the automatism that ADR 0009 rejected when it chose an explicit `setup` command over a postinstall script.
-That trade-off deserves its own decision, made with usage evidence.
+A home-manager module was initially deferred rather than rejected, on the grounds that a module managing the Agent Skill declaratively would reintroduce the automatism ADR 0009 rejected when it chose an explicit `setup` command over a postinstall script, and that the trade-off deserved its own decision made with usage evidence.
+
+That evidence arrived and reversed the deferral; the flake exposes `homeModules.gitea-axi` as of task 0045.
+The reasoning is recorded in [ADR 0020](../adr/0020-home-manager-module-for-declarative-context.md).
+In short: `setup` and `setup hooks` are write-only against files the operator is assumed to own, so an operator whose agent configuration is generated cannot use them at all and hand-copies the Skill instead, where it drifts from the package shipping it.
+And a module the operator imports and then explicitly enables is not the automatism ADR 0009 guards against — that guard is against installation without intent, and an `enable` option is intent.
 
 Consumers deduplicate nixpkgs by pointing the flake's nixpkgs input at their own.
 Consequently the flake's own nixpkgs input governs only standalone builds, the development shell, and flake checks — never the deployed artifact.
@@ -185,8 +188,6 @@ Building the package proves the derivation is correct; whether the maintainer's 
 Removing the `tea` runtime dependency.
 It was raised and examined during design: ADR 0002 moved command dispatch off `tea` but retained it for credential discovery, and eliminating it would mean either owning a credential store or reading `tea`'s internal configuration format, which ADR 0001 explicitly rejected because it forfeits OAuth token refresh.
 Wrapping the binary makes the dependency invisible in practice, which removes most of the practical motivation.
-
-A home-manager module, and with it any declarative management of the Agent Skill or the session-start hook.
 
 An overlay output and a NixOS module output.
 

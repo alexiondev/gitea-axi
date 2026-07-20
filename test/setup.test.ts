@@ -91,9 +91,52 @@ function writeFakeBinary(dir: string, contents: string): string {
   return dir;
 }
 
+/**
+ * The SessionStart entry declared in `session-start-hook.json`, the committed
+ * specification the Nix home-manager module writes into a declarative
+ * configuration.
+ *
+ * That module and this command are two ways to arrive at the same entry, with
+ * nothing structural keeping them agreed — so the specification is read here
+ * rather than restated, and the assertion below is what holds them together. It
+ * fails if either side drifts, including if the agent SDK changes the envelope
+ * it writes out from under the imperative path.
+ */
+function declaredSessionStartEntry(): unknown {
+  return JSON.parse(
+    readFileSync(new URL("../session-start-hook.json", import.meta.url), "utf8"),
+  );
+}
+
+/**
+ * Run `setup hooks` with a wrapper-based install of this entrypoint on PATH.
+ *
+ * That is a wrapper-based install in miniature — a script that *invokes* the
+ * entrypoint, so its realpath is itself and the agent SDK could never match it
+ * from the entrypoint's side — and it is the shape every real install produces,
+ * Nix's included. It is also the only arrangement in which the bare name gets
+ * recorded, so any assertion about that name has to arrange it first.
+ */
+async function installHooksBehindWrapper(home: string): Promise<void> {
+  const binDir = writeFakeBinary(
+    join(home, "wrapper"),
+    `#!/bin/sh\nexec node ${entrypointPath()} "$@"\n`,
+  );
+
+  const { exitCode } = await withPath(`${binDir}${delimiter}${process.env.PATH ?? ""}`, () =>
+    runCliTest(["setup", "hooks"], { env: { HOME: home } }),
+  );
+  expect(exitCode).toBe(0);
+}
+
+/** The Claude Code settings the hook install wrote into `home`. */
+function claudeSettings(home: string) {
+  return JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8"));
+}
+
 /** The single command string recorded in the Claude Code SessionStart hook. */
 function recordedHookCommand(home: string): string {
-  const settings = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8"));
+  const settings = claudeSettings(home);
   expect(settings.hooks.SessionStart).toHaveLength(1);
   expect(settings.hooks.SessionStart[0].hooks).toHaveLength(1);
   return settings.hooks.SessionStart[0].hooks[0].command;
@@ -222,29 +265,25 @@ describe("setup hooks", () => {
     const second = await runCliTest(["setup", "hooks"], { env: { HOME: tempHome } });
     expect(second.exitCode).toBe(0);
 
-    const claudeSettingsPath = join(tempHome, ".claude", "settings.json");
-    const claudeSettings = JSON.parse(readFileSync(claudeSettingsPath, "utf8"));
-    expect(claudeSettings.hooks.SessionStart).toHaveLength(1);
-    expect(claudeSettings.hooks.SessionStart[0].hooks).toHaveLength(1);
+    const settings = claudeSettings(tempHome);
+    expect(settings.hooks.SessionStart).toHaveLength(1);
+    expect(settings.hooks.SessionStart[0].hooks).toHaveLength(1);
   });
 
   it("records the bare binary name when a wrapper on PATH runs this entrypoint", async () => {
     tempHome = mkdtempSync(join(tmpdir(), "gitea-axi-setup-"));
 
-    // A wrapper-based install in miniature — a script that *invokes* the
-    // entrypoint, so its realpath is itself and the SDK could never match it
-    // from the entrypoint's side. This is the shape Nix installs.
-    const binDir = writeFakeBinary(
-      join(tempHome, "wrapper"),
-      `#!/bin/sh\nexec node ${entrypointPath()} "$@"\n`,
-    );
-
-    const { exitCode } = await withPath(`${binDir}${delimiter}${process.env.PATH ?? ""}`, () =>
-      runCliTest(["setup", "hooks"], { env: { HOME: tempHome } }),
-    );
-    expect(exitCode).toBe(0);
+    await installHooksBehindWrapper(tempHome);
 
     expect(recordedHookCommand(tempHome)).toBe("gitea-axi");
+  });
+
+  it("writes exactly the SessionStart entry the packaged specification declares", async () => {
+    tempHome = mkdtempSync(join(tmpdir(), "gitea-axi-setup-"));
+
+    await installHooksBehindWrapper(tempHome);
+
+    expect(claudeSettings(tempHome).hooks.SessionStart).toEqual([declaredSessionStartEntry()]);
   });
 
   it("falls back to the absolute entrypoint path when gitea-axi is not on PATH", async () => {

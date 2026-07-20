@@ -48,6 +48,10 @@ A new build-relevant top-level file — a TypeScript configuration, a runner con
 The failure is loud but disconnected from its cause: the error names the missing file, not the allowlist that omitted it.
 The flip side is the point of the design — touching an ADR, a spec, a task, a `bench/` file, or prose documentation must *not* change the derivation's output path.
 
+`nix flake check` on a **dirty working tree** intermittently fails with `error: path '<hash>-source' is not valid`, naming the store path of the derivation's filtered source.
+It is an evaluation-cache artefact of the dirty-tree flake source being re-created, not a fault in the expression — running `nix build .#gitea-axi --dry-run` first makes the very next `nix flake check` pass unchanged.
+Reach for that before debugging the `lib.fileset` allowlist, which the error's wording otherwise points straight at.
+
 `buildNpmPackage` provides **no check hook**, so `doCheck = true` on its own is silently inert — the build logs `no Makefile or custom checkPhase, doing nothing` and ships a package whose tests never ran.
 Running the fast tier inside the derivation requires an explicit `checkPhase`; it also needs `git` and `which` in `nativeCheckInputs` and a writable `HOME`, since some of those tests shell out to `git`.
 

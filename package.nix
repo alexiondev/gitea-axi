@@ -19,6 +19,20 @@ let
   # reading it here means a store path and a released version cannot disagree.
   manifest = lib.importJSON ./package.json;
 
+  # Where the bundled Agent Skill lands in the output, and the one address a
+  # consumer may depend on. The Skill's other copy — inside the installed node
+  # modules tree, where `setup` resolves it relative to its own module — is an
+  # artefact of how the command finds it at runtime, and moves whenever the
+  # packaging method changes.
+  skillSubdir = "share/gitea-axi/skills/gitea-axi";
+
+  # The SessionStart hook entry, read from the committed specification rather
+  # than written out here. The imperative `setup hooks` writes this same entry
+  # through the agent SDK, and a test drives it and asserts the two agree — so
+  # declaring it a second time in Nix would be a second source of truth with
+  # nothing checking it against the first.
+  sessionStartHook = lib.importJSON ./session-start-hook.json;
+
   # An explicit allowlist of what the build and its tests actually read. The
   # repository's highest-churn directories — .claude, bench, prose docs — are
   # all build-irrelevant, so a whole-repository source would let writing an ADR
@@ -43,10 +57,14 @@ let
       ./tsconfig.build.json
       ./vitest.config.ts
       ./vitest.packaging.config.ts
+      # Read by the fast tier, which asserts the imperative hook install writes
+      # what this declares. Also read at evaluation time above, but that read is
+      # of the flake source rather than of `src` and would not require it here.
+      ./session-start-hook.json
     ];
   };
 in
-buildNpmPackage {
+buildNpmPackage (finalAttrs: {
   pname = "gitea-axi";
   inherit (manifest) version;
   inherit src nodejs;
@@ -101,9 +119,17 @@ buildNpmPackage {
   # ADR 0018: append, never prepend. The operator's own `tea` owns the
   # credential store it refreshes in place, so the closure's copy is a
   # fresh-machine fallback rather than an override.
+  #
+  # The Agent Skill is also published under a stable address (ADR 0020), so a
+  # Nix expression can install it declaratively without reaching into the node
+  # modules tree. `cp` failing on a missing source is the guard that this
+  # address keeps pointing at something.
   postInstall = ''
     wrapProgram $out/bin/gitea-axi \
       --suffix PATH : ${lib.makeBinPath [ git tea ]}
+
+    mkdir -p "$(dirname "$out/${skillSubdir}")"
+    cp -R skills/gitea-axi "$out/${skillSubdir}"
   '';
 
   # Drive the binary that was just installed through the shared installed-binary
@@ -144,11 +170,26 @@ buildNpmPackage {
     runHook postInstallCheck
   '';
 
-  # The Node the package is built against, published as a declared interface
-  # rather than left to be read off the build environment. The flake's dev shell
-  # consumes exactly this, so the two cannot drift onto different majors — and
-  # this attribute is why that holds, so removing it breaks the shell.
-  passthru = { inherit nodejs; };
+  # The package's declared interface to Nix expressions, published rather than
+  # left to be read off the build environment or guessed at from the output's
+  # layout. Every attribute here has a consumer that breaks if it is removed.
+  passthru = {
+    # The Node the package is built against. The flake's dev shell consumes
+    # exactly this, so development and the shipped artifact cannot drift onto
+    # different majors.
+    inherit nodejs;
+
+    # The bundled Agent Skill's directory, for a configuration that installs it
+    # declaratively. A directory rather than the SKILL.md inside it, so a Skill
+    # that grows helper files stays one reference.
+    skill = "${finalAttrs.finalPackage}/${skillSubdir}";
+
+    # The SessionStart hook entry, verbatim as it belongs in a Claude Code
+    # settings.json. Evaluating this builds nothing: it is the committed
+    # specification, and the command it records is a name resolved on PATH
+    # rather than a store path (ADR 0019).
+    inherit sessionStartHook;
+  };
 
   meta = {
     inherit (manifest) description homepage;
@@ -166,4 +207,4 @@ buildNpmPackage {
     # evaluate. Consumed against 26.05, x86_64-darwin builds fine from here.
     platforms = lib.platforms.linux ++ lib.platforms.darwin;
   };
-}
+})

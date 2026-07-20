@@ -41,6 +41,17 @@
         }
       );
 
+      # Declarative ambient context for an operator whose agent configuration is
+      # generated rather than owned (ADR 0020). Not per-system: it is a module
+      # function, and the package it defaults to comes from the importing
+      # configuration's own `pkgs` rather than from this flake's nixpkgs — which
+      # is how a consumer deduplicates, and the same reason the derivation is a
+      # callable expression rather than a flake-bound one.
+      homeModules = rec {
+        gitea-axi = ./home-manager-module.nix;
+        default = gitea-axi;
+      };
+
       # The toolchain the repository actually needs: the build and the fast tier
       # want Node, the live end-to-end tier and the benchmark harness additionally
       # shell out to `git`, `tea`, and `curl` — none of which the repository
