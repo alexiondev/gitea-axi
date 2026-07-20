@@ -49,6 +49,17 @@ The flip side is the point of the design — touching an ADR, a spec, a task, a 
 `buildNpmPackage` provides **no check hook**, so `doCheck = true` on its own is silently inert — the build logs `no Makefile or custom checkPhase, doing nothing` and ships a package whose tests never ran.
 Running the fast tier inside the derivation requires an explicit `checkPhase`; it also needs `git` and `which` in `nativeCheckInputs` and a writable `HOME`, since some of those tests shell out to `git`.
 
+`nodejsInstallExecutables` (inside `npmInstallHook`) installs each manifest `bin` entry as a **generated wrapper that invokes `node <path>` explicitly**, not as a symlink to the entrypoint.
+So under Nix the executable bit on `dist/main.js` is not load-bearing — `chmod -x` on it changes nothing — while the bit on `$out/bin/gitea-axi` is, and makeWrapper always sets it.
+The npm path differs: there the `bin` entry is symlinked and npm sets the bit at install time.
+
+`npmInstallHook` runs `npm prune --omit=dev` against the **build tree's** `node_modules` during `installPhase`, so dev dependencies (vitest included) are gone by the time `postInstall` or `installCheckPhase` runs.
+Anything that needs them after install must snapshot the tree in `preInstall` first; `cp -al` is the cheap way, since the prune's deletions do not follow hardlinks.
+
+Running vitest inside the derivation leaves a run cache at `node_modules/.vite/…/results.json` that records durations and timestamps, and `npmInstallHook` copies `node_modules` into `$out` wholesale.
+Left alone it ships a stray cache in the closure and makes the output non-reproducible — visible only under `nix build --rebuild`, which reports "may not be deterministic"; an ordinary build stays green.
+`checkPhase` deletes it before the install phase runs.
+
 nixpkgs 26.11 (the `nixos-unstable` the flake tracks) has **dropped `x86_64-darwin`**.
 `legacyPackages.x86_64-darwin` now *throws* rather than merely failing to build, so listing that system in the flake's `systems` breaks `nix flake show` and `nix flake check` for every system at once, not just that one.
 Intel macOS would need the 26.05 branch.

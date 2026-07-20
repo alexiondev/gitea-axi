@@ -41,3 +41,6 @@ Distribution touches no Gitea API, so this smoke test is the distribution analog
 The two facets are `test/packaging/tarball.test.ts`, which is npm-specific by nature, and `test/packaging/installed-binary.test.ts`, which asserts what any *installed* gitea-axi must do, whatever installed it.
 That second facet is therefore also the check a non-npm installation path runs against its own output.
 Set `GITEA_AXI_INSTALLED_BIN` to the path of an already-installed binary to have it drive that one and skip the pack-and-install setup.
+
+The Nix build is that other caller: its `installCheckPhase` points this variable at the wrapped binary it has just installed and runs the facet alone via `npm run test:installed`.
+So `nix build` and `npm run test:pack` guarantee the same things about an installed gitea-axi, and neither can quietly weaken while the other holds.
