@@ -40,3 +40,15 @@ This is a NixOS host with no global Node install, and the repository has no dev 
 Until then, prefix commands with `nix shell nixpkgs#nodejs -c ...`, adding `nixpkgs#tea` for anything that resolves credentials — including `gitea-axi pr create`.
 `node_modules/` may be absent too, so `npm ci` first.
 Commits need an explicit identity: `git -c user.name=alexion -c user.email=contact@alexion.dev commit ...`, matching the existing history.
+
+The Nix derivation's source is an **explicit allowlist** in [`package.nix`](package.nix), not the whole repository and not a gitignore filter.
+A new build-relevant top-level file — a TypeScript configuration, a runner configuration the fast tier loads, a directory the build reads — must be added to that `lib.fileset.unions` list or `nix build` fails on a missing file.
+The failure is loud but disconnected from its cause: the error names the missing file, not the allowlist that omitted it.
+The flip side is the point of the design — touching an ADR, a spec, a task, a `bench/` file, or prose documentation must *not* change the derivation's output path.
+
+`buildNpmPackage` provides **no check hook**, so `doCheck = true` on its own is silently inert — the build logs `no Makefile or custom checkPhase, doing nothing` and ships a package whose tests never ran.
+Running the fast tier inside the derivation requires an explicit `checkPhase`; it also needs `git` and `which` in `nativeCheckInputs` and a writable `HOME`, since some of those tests shell out to `git`.
+
+nixpkgs 26.11 (the `nixos-unstable` the flake tracks) has **dropped `x86_64-darwin`**.
+`legacyPackages.x86_64-darwin` now *throws* rather than merely failing to build, so listing that system in the flake's `systems` breaks `nix flake show` and `nix flake check` for every system at once, not just that one.
+Intel macOS would need the 26.05 branch.
