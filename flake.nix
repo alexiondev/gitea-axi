@@ -6,8 +6,18 @@
   # only — never the deployed artifact.
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
+  # Present only so `nix flake check` can evaluate the home-manager module
+  # against real home-manager (the `home-manager-module` check). Its nixpkgs
+  # follows this flake's, so the module is checked against the same
+  # nixpkgs-and-home-manager pairing a consumer following this flake would get.
+  # It has no bearing on the package or the module a consumer imports — the
+  # module is a bare function that takes the importing configuration's own
+  # home-manager and pkgs.
+  inputs.home-manager.url = "github:nix-community/home-manager";
+  inputs.home-manager.inputs.nixpkgs.follows = "nixpkgs";
+
   outputs =
-    { self, nixpkgs }:
+    { self, nixpkgs, home-manager }:
     let
       # x86_64-darwin is deliberately absent: nixpkgs 26.11 dropped it, and
       # `legacyPackages.x86_64-darwin` now throws rather than merely failing to
@@ -79,16 +89,31 @@
         }
       );
 
-      # An alias for the package, so `nix flake check` builds it and thereby runs
-      # both its verification phases — the fast tier in `checkPhase`, the
-      # installed-binary tier in `installCheckPhase`.
+      # Two checks. `gitea-axi` is an alias for the package, so `nix flake check`
+      # builds it and thereby runs both its verification phases — the fast tier
+      # in `checkPhase`, the installed-binary tier in `installCheckPhase`.
       #
-      # No granular per-stage checks: the one stage that would add coverage the
-      # package build does not already have is the full typecheck, which spans
-      # `test/` and `bench/` and would therefore drag the benchmark harness into
-      # the derivation's inputs — undoing the source filtering that keeps
-      # benchmark churn from forcing a rebuild. That typecheck stays in
-      # continuous integration, where it already runs.
-      checks = forAllSystems ({ system, ... }: { inherit (self.packages.${system}) gitea-axi; });
+      # `home-manager-module` evaluates the home-manager module through real
+      # home-manager and builds the home files derivation it produces under
+      # several operator configurations, proving the module's composition (ADR
+      # 0021). It reuses the package check's store path rather than rebuilding.
+      #
+      # No granular per-stage checks for the package: the one stage that would
+      # add coverage the package build does not already have is the full
+      # typecheck, which spans `test/` and `bench/` and would therefore drag the
+      # benchmark harness into the derivation's inputs — undoing the source
+      # filtering that keeps benchmark churn from forcing a rebuild. That
+      # typecheck stays in continuous integration, where it already runs.
+      checks = forAllSystems (
+        { pkgs, system }: {
+          inherit (self.packages.${system}) gitea-axi;
+
+          home-manager-module = import ./checks/home-manager-module.nix {
+            inherit pkgs home-manager;
+            module = self.homeModules.gitea-axi;
+            package = self.packages.${system}.gitea-axi;
+          };
+        }
+      );
     };
 }

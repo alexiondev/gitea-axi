@@ -26,11 +26,24 @@ This adds a module check alongside the existing package check in the flake's `ch
 
 ## Acceptance criteria
 
-- [ ] The flake has a home-manager input whose nixpkgs follows the flake's nixpkgs; `flake.lock` is updated.
-- [ ] A new check under the flake's `checks` output evaluates the real module through home-manager's standalone configuration entry point and builds the home files derivation — no Claude Code binary or running agent required.
-- [ ] The attribute-set-skills configuration asserts the module's Skill and the operator's skill both land, each at its own name.
-- [ ] The whole-directory-skills (path form) configuration asserts the module's Skill lands alongside the operator's directory contents; a non-recursive path-form install would fail this as a build-time collision.
-- [ ] The Claude-Code-disabled configuration asserts no gitea-axi Skill entry is written.
-- [ ] A configuration with an operator's own SessionStart hook asserts the module's hook merges into that list rather than replacing it.
-- [ ] The check asserts on the generation's file tree only, not on option values or store paths.
-- [ ] `nix flake check` runs the new check across the flake's systems and passes.
+- [x] The flake has a home-manager input whose nixpkgs follows the flake's nixpkgs; `flake.lock` is updated.
+- [x] A new check under the flake's `checks` output evaluates the real module through home-manager's standalone configuration entry point and builds the home files derivation — no Claude Code binary or running agent required.
+- [x] The attribute-set-skills configuration asserts the module's Skill and the operator's skill both land, each at its own name.
+- [x] The whole-directory-skills (path form) configuration asserts the module's Skill lands alongside the operator's directory contents; a non-recursive path-form install would fail this as a build-time collision.
+- [x] The Claude-Code-disabled configuration asserts no gitea-axi Skill entry is written.
+- [x] A configuration with an operator's own SessionStart hook asserts the module's hook merges into that list rather than replacing it.
+- [x] The check asserts on the generation's file tree only, not on option values or store paths.
+- [x] `nix flake check` runs the new check across the flake's systems and passes.
+
+## Implementation Notes
+
+The check lives in its own file, `checks/home-manager-module.nix`, imported from the flake's `checks` output beside the existing package check; the `forAllSystems` callback now destructures `{ pkgs, system }` because the check needs `pkgs` to build fixtures and the derivation.
+`home-manager` is added as a flake input with `inputs.nixpkgs.follows = "nixpkgs"`; it is a check-only development input with no bearing on the package or the module a consumer imports, and the comment in `flake.nix` says so.
+
+Each of the four configurations builds `config.home-files` — the home-manager file-linkage layer — and the final `runCommandLocal` asserts on that tree with `test`/`grep` only: skill files present or absent by path, and the two SessionStart commands present as quoted JSON string values in `settings.json`.
+The hook-merge assertion reads generated file content because that is the only place a list merge is observable; the spec's Testing Decisions name "the hook merges into the operator's own hooks" as a required assertion, so this stays within "assert on the file tree, not on option values or store paths".
+
+On the cross-system criterion: `nix flake check` builds the check for the host system and passes, and omits the incompatible systems (`aarch64-*`) with a warning — identical per-system semantics to the pre-existing package check, which also builds only natively.
+The check is import-from-derivation-bearing (the Claude Code module reads the fixture skill directories at evaluation time), so evaluating a foreign system's check forces a cross-platform fixture build rather than skipping cleanly; this is not exercised by the default `nix flake check` and does not affect the native run.
+
+Verified by `nix flake check` (passes, all outputs) and by inspecting each configuration's built `home-files` tree directly: the disabled-Claude-Code generation contains no `.claude` directory at all, and the merged-hook `settings.json` contains both hooks in the `SessionStart` array — confirming the assertions are not vacuous.
