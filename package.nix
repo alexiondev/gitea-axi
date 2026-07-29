@@ -179,9 +179,10 @@ buildNpmPackage (finalAttrs: {
     # different majors.
     inherit nodejs;
 
-    # The bundled Agent Skill's directory, for a configuration that installs it
-    # declaratively. A directory rather than the SKILL.md inside it, so a Skill
-    # that grows helper files stays one reference.
+    # The bundled Agent Skill's directory, for a configuration that packages it
+    # into an agent-agnostic project-local delivery mechanism. A directory rather
+    # than the SKILL.md inside it, so a Skill that grows helper files stays one
+    # reference.
     skill = "${finalAttrs.finalPackage}/${skillSubdir}";
 
     # The SessionStart hook entry, verbatim as it belongs in a Claude Code

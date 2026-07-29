@@ -69,31 +69,32 @@ Use the module instead ([ADR 0020](.claude/adr/0020-home-manager-module-for-decl
 ```
 
 `programs.gitea-axi.enable` installs the CLI, always.
-The Claude Code context — the Agent Skill and the SessionStart hook — follows the harness: it is declared under a single toggle, `programs.gitea-axi.enableClaudeCodeIntegration`, on by default, and lands only when `programs.claude-code.enable` is also on.
+The Claude Code SessionStart hook follows the harness: it is declared under `programs.gitea-axi.enableClaudeCodeIntegration`, on by default, and lands only when `programs.claude-code.enable` is also on.
 Enable gitea-axi on a host without Claude Code and you get the CLI and nothing else — no assertion, no toggles to turn off.
 Importing the module without setting `enable` changes nothing at all.
 
 The hook is declared through `programs.claude-code`'s own settings option, so a configuration that already sets its own `settings.hooks.SessionStart` gets gitea-axi's merged in alongside rather than colliding.
-The Skill is written straight into Claude Code's skills directory, so it composes with your own skills whether you declare them as `programs.claude-code.skills.<name> = ...` or as a single path standing for a whole directory — there is no form you have to switch to.
+The Agent Skill is exposed as `packages.<system>.gitea-axi-skill` for project-local delivery through an agent-agnostic dev-shell helper.
 
 #### Options
 
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `programs.gitea-axi.enable` | `false` | Install the CLI. |
-| `programs.gitea-axi.package` | your `pkgs`' build of the package | The package to install, or `null` to declare the context without the binary. |
-| `programs.gitea-axi.enableClaudeCodeIntegration` | `true` | Declare the Agent Skill and SessionStart hook when Claude Code is enabled. |
+| `programs.gitea-axi.package` | your `pkgs`' build of the package | The package to install, or `null` to declare the hook without the binary. |
+| `programs.gitea-axi.enableClaudeCodeIntegration` | `true` | Declare the SessionStart hook when Claude Code is enabled. |
 
-`package = null` declares the context without installing the binary — for instance when you install gitea-axi system-wide through `environment.systemPackages`.
-The hook records the bare name `gitea-axi` and lets `PATH` resolve it ([ADR 0019](.claude/adr/0019-hook-records-search-path-name.md)), so a binary installed anywhere on `PATH` satisfies it, and the Skill is still taken from the default build.
+`package = null` declares the hook without installing the binary — for instance when you install gitea-axi system-wide through `environment.systemPackages`.
+The hook records the bare name `gitea-axi` and lets `PATH` resolve it ([ADR 0019](.claude/adr/0019-hook-records-search-path-name.md)), so a binary installed anywhere on `PATH` satisfies it.
 
-Turn `enableClaudeCodeIntegration` off to keep the CLI declarative while writing the Skill and hook yourself with `setup`.
+Turn `enableClaudeCodeIntegration` off to keep the CLI declarative while writing the hook yourself with `setup`.
 
 #### What the module does not cover
 
-Only the Claude Code integration is declarative.
+Only the Claude Code SessionStart hook is declarative.
 The Codex and OpenCode files that `setup hooks` also writes have no home-manager module owning them, so gitea-axi does not write them declaratively either.
 On a declarative system those targets are unmanaged and therefore writable, so `gitea-axi setup hooks` still installs them.
+The Agent Skill is packaged for project-local delivery, not installed globally by this module.
 
 ## Verifying an install
 

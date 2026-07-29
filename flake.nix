@@ -47,6 +47,15 @@
       packages = forAllSystems (
         { pkgs, ... }: rec {
           gitea-axi = pkgs.callPackage ./package.nix { };
+          gitea-axi-skill = pkgs.runCommandLocal "gitea-axi-skill"
+            {
+              passthru.skillName = "gitea-axi";
+            }
+            ''
+              mkdir -p "$out"
+              cp -R ${gitea-axi.skill}/. "$out/"
+              test -f "$out/SKILL.md"
+            '';
           default = gitea-axi;
         }
       );

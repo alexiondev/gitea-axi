@@ -8,11 +8,11 @@
 # the file mechanism, only which files a generation contains. Building the home
 # files derivation needs neither the Claude Code binary nor a running agent.
 #
-# The configurations cover the composition risks the reshape introduced: the
-# Skill coexisting with an operator's own skills in both the attribute-set and
-# whole-directory forms, the explicit sibling-enable gate that keeps the Skill
-# off a host without Claude Code, and the hook merging into an operator's own
-# SessionStart list rather than replacing it.
+# The configurations cover the remaining composition risks: the explicit
+# sibling-enable gate that keeps the hook off a host without Claude Code, the
+# hook merging into an operator's own SessionStart list rather than replacing it,
+# and the Agent Skill staying out of global harness directories because project
+# dev shells deliver it through the agent-agnostic skills helper.
 {
   pkgs,
   home-manager,
@@ -20,25 +20,6 @@
   package,
 }:
 let
-  inherit (pkgs) lib;
-
-  # A skill the operator declares as their own, as one attribute-set entry. Its
-  # SKILL.md is what the attribute-set assertion looks for beside the module's.
-  operatorAttrSkill = pkgs.runCommandLocal "operator-attr-skill" { } ''
-    mkdir -p "$out"
-    printf '%s\n' "the operator's own attribute-set skill" > "$out/SKILL.md"
-  '';
-
-  # A whole directory of skills, one folder per skill, for the path form of the
-  # operator's own `programs.claude-code.skills`. The Claude Code module installs
-  # this recursively; the module's own nested Skill entry has to drop in beside
-  # its contents rather than collide with a single link over the directory.
-  operatorSkillsDir = pkgs.runCommandLocal "operator-skills-dir" { } ''
-    mkdir -p "$out/operator-dir-skill"
-    printf '%s\n' "the operator's own whole-directory skill" \
-      > "$out/operator-dir-skill/SKILL.md"
-  '';
-
   # A distinctive command so the merged-hook assertion can tell the operator's
   # own SessionStart hook apart from gitea-axi's in the generated settings.json.
   operatorHook = {
@@ -74,27 +55,16 @@ let
       ];
     }).config.home-files;
 
-  # An operator on Claude Code who declares their own skill as an attribute-set
-  # entry: the module's Skill and theirs must both land, each at its own name.
-  attrSetSkills = homeFiles {
-    programs.claude-code.enable = true;
-    # A store path (not a bare derivation): the skills value type takes a path,
-    # and a derivation would be read as the attribute-set branch of the option.
-    programs.claude-code.skills.operator-attr-skill = "${operatorAttrSkill}";
-  };
-
-  # An operator who declares their own skills as a whole directory (path form):
-  # the module's Skill lands beside the directory's contents. A regression to a
-  # non-recursive path-form install would fail this build as a file collision.
-  wholeDirSkills = homeFiles {
-    programs.claude-code.enable = true;
-    programs.claude-code.skills = "${operatorSkillsDir}";
-  };
-
-  # Claude Code disabled: the explicit sibling-enable gate must leave no
-  # gitea-axi Skill entry in the generation.
+  # Claude Code disabled: the sibling-enable gate in the Claude Code module must
+  # leave no settings file or Skill entry in the generation.
   claudeCodeOff = homeFiles {
     programs.claude-code.enable = false;
+  };
+
+  # Claude Code enabled: the module contributes only the SessionStart hook, not
+  # a global Skill entry.
+  claudeCodeOn = homeFiles {
+    programs.claude-code.enable = true;
   };
 
   # An operator with their own SessionStart hook: the module's hook must merge
@@ -107,26 +77,21 @@ in
 pkgs.runCommandLocal "gitea-axi-home-manager-module-check"
   {
     # Forcing each derivation as a build input is what actually builds the home
-    # files tree under every configuration; the whole-directory build would fail
-    # here, before any assertion runs, on a non-recursive-install regression.
+    # files tree under every configuration.
     inherit
-      attrSetSkills
-      wholeDirSkills
       claudeCodeOff
+      claudeCodeOn
       mergedHook
       ;
   }
   ''
-    echo "attribute-set skills: module's Skill and operator's both land"
-    test -f "$attrSetSkills/.claude/skills/gitea-axi/SKILL.md"
-    test -f "$attrSetSkills/.claude/skills/operator-attr-skill/SKILL.md"
-
-    echo "whole-directory skills: module's Skill lands beside the directory"
-    test -f "$wholeDirSkills/.claude/skills/gitea-axi/SKILL.md"
-    test -f "$wholeDirSkills/.claude/skills/operator-dir-skill/SKILL.md"
-
-    echo "Claude Code disabled: no gitea-axi Skill entry is written"
+    echo "Claude Code disabled: no hook settings or global Skill entry is written"
+    test ! -e "$claudeCodeOff/.claude/settings.json"
     test ! -e "$claudeCodeOff/.claude/skills/gitea-axi"
+
+    echo "Claude Code enabled: hook lands, but the Skill is not globally installed"
+    grep -q '"gitea-axi"' "$claudeCodeOn/.claude/settings.json"
+    test ! -e "$claudeCodeOn/.claude/skills/gitea-axi"
 
     echo "operator's own SessionStart hook: the module's hook merges in"
     # Match the commands as quoted JSON string values, not by their position or
