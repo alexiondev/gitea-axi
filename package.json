@@ -42,7 +42,7 @@
     "bench:report": "tsx bench/report.ts"
   },
   "dependencies": {
-    "@toon-format/toon": "^2.3.0",
+    "@toon-format/toon": "^2.3.1",
     "axi-sdk-js": "^0.1.8",
     "gitea-js": "^1.23.0"
   },
